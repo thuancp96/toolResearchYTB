@@ -42,6 +42,8 @@ theo cột.
 - **Chuột phải** vào kênh (chọn được nhiều dòng) → **⬇ Tải video của kênh này** →
   tải N video mới nhất (hoặc tất cả) vào `<thư mục>/<tên kênh>/`. Bấm **Dừng** để
   hủy.
+- Hoặc dán trực tiếp vào ô **URL kênh** rồi bấm **⬇ Tải video** — cũng tải theo
+  cùng cấu hình (số lượng / Tải tất cả). Hỗ trợ URL kênh, playlist, hoặc 1 video.
 - Cần `yt-dlp` (`python -m pip install yt-dlp`). Tải dạng file đơn `best[ext=mp4]`
   (không cần ghép bằng ffmpeg).
 

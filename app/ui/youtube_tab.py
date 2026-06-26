@@ -117,6 +117,7 @@ class YouTubeTab(QWidget):
         root = QVBoxLayout(self)
         root.addWidget(self._build_config())
         root.addLayout(self._build_download_bar())
+        root.addLayout(self._build_url_bar())
 
         row = QHBoxLayout()
         self.btn_search = QPushButton("🔎 Bắt đầu tìm")
@@ -218,6 +219,19 @@ class YouTubeTab(QWidget):
         self.dl_all = QCheckBox("Tải tất cả")
         self.dl_all.toggled.connect(self.dl_count.setDisabled)
         bar.addWidget(self.dl_all)
+        return bar
+
+    def _build_url_bar(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("URL kênh:"))
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText(
+            "Dán URL kênh YouTube (vd https://www.youtube.com/@kenh) rồi bấm Tải video")
+        self.url_edit.returnPressed.connect(self._download_from_url)
+        bar.addWidget(self.url_edit, 1)
+        self.btn_url_dl = QPushButton("⬇ Tải video")
+        self.btn_url_dl.clicked.connect(self._download_from_url)
+        bar.addWidget(self.btn_url_dl)
         return bar
 
     def _build_table(self) -> QTableWidget:
@@ -407,7 +421,7 @@ class YouTubeTab(QWidget):
     # ------------------------------------------------------------------
     # Download (yt-dlp)
     # ------------------------------------------------------------------
-    def _download_selected(self, infos: list[ChannelInfo]) -> None:
+    def _start_download(self, jobs: list[tuple[str, str]]) -> None:
         if not ytdlp_available():
             QMessageBox.warning(self, "Thiếu yt-dlp",
                                 "Cần cài yt-dlp để tải video:\n\n"
@@ -422,9 +436,8 @@ class YouTubeTab(QWidget):
             QMessageBox.information(self, "Đang tải",
                                     "Đang có tác vụ tải chạy, vui lòng đợi/Dừng.")
             return
-        jobs = [(info.title or info.channel_id,
-                 channel_videos_url(info.channel_id, info.uploads_playlist))
-                for info in infos]
+        if not jobs:
+            return
         n = "tất cả" if self.dl_all.isChecked() else str(self.dl_count.value())
         self.dl_worker = VideoDownloadWorker(
             jobs, dest, self.dl_count.value(), self.dl_all.isChecked())
@@ -433,8 +446,33 @@ class YouTubeTab(QWidget):
         self.dl_worker.progress.connect(self._on_progress)
         self.dl_worker.finished_all.connect(self._on_download_done)
         self.btn_stop.setEnabled(True)
-        self.status.setText(f"Bắt đầu tải {n} video/kênh cho {len(jobs)} kênh…")
+        self.status.setText(f"Bắt đầu tải {n} video cho {len(jobs)} mục…")
         self.dl_worker.start()
+
+    def _download_selected(self, infos: list[ChannelInfo]) -> None:
+        self._start_download([
+            (info.title or info.channel_id,
+             channel_videos_url(info.channel_id, info.uploads_playlist))
+            for info in infos])
+
+    @staticmethod
+    def _normalize_channel_url(url: str) -> str:
+        """Point a bare channel URL at its Videos tab so 'first N' = newest N."""
+        url = url.strip()
+        low = url.lower()
+        if any(k in low for k in ("watch?v=", "list=", "/videos", "/shorts",
+                                  "/streams")):
+            return url
+        if any(k in low for k in ("/channel/", "/@", "/c/", "/user/")):
+            return url.rstrip("/") + "/videos"
+        return url
+
+    def _download_from_url(self) -> None:
+        url = self.url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "Thiếu URL", "Nhập URL kênh YouTube.")
+            return
+        self._start_download([(url, self._normalize_channel_url(url))])
 
     def _on_download_done(self, n: int) -> None:
         if not (self.worker and self.worker.isRunning()):
