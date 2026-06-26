@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+config.json
+output/
+*.mp4
+.venv/
