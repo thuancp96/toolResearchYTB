@@ -26,6 +26,8 @@ COLS = ["Icon", "Tên Kênh", "Mã kênh", "URL", "Quốc gia", "Ngày tạo",
         "Video gần đây", "lượt xem/ngày", "xem/ngày (Cao)", "Video đỉnh ID"]
 SORT_COL_HIGH = 12
 
+DEFAULT_API_KEY = "AIzaSyBeOdyYDN5ZzHsXFylajcbO73G1ez4R4mQ"
+
 CSV_FIELDS = ["channel_id", "title", "handle", "url", "country", "published_at",
               "age_days", "subs", "total_views", "total_videos", "recent_count",
               "views_per_day", "views_per_day_high", "top_video_id"]
@@ -161,6 +163,7 @@ class YouTubeTab(QWidget):
         self.api_key.setEchoMode(QLineEdit.Password)
         self.api_key.setPlaceholderText(
             "Dán YouTube Data API key (hoặc đặt biến môi trường YOUTUBE_API_KEY)")
+        self.api_key.setText(DEFAULT_API_KEY)
         grid.addWidget(QLabel("API key:"), 0, 0)
         grid.addWidget(self.api_key, 0, 1, 1, 5)
 
@@ -556,7 +559,7 @@ class YouTubeTab(QWidget):
     def apply_config(self, d: dict) -> None:
         if not d:
             return
-        self.api_key.setText(d.get("api_key", ""))
+        self.api_key.setText(d.get("api_key") or DEFAULT_API_KEY)
         self.keyword.setText(d.get("keyword", ""))
         code = d.get("region", "US")
         idx = self.region.findData(code)
