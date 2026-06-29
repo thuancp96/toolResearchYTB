@@ -7,8 +7,49 @@ preview always matches the rendered output.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Tuple
+
+# Square-bracket groups (yt-dlp appends the video id as " [VIDEOID]").
+_BRACKET_RE = re.compile(r"\[[^\]]*\]")
+
+# Hashtags such as "#short" / "#shorts".
+_HASHTAG_RE = re.compile(r"#\w+", re.UNICODE)
+
+# A trailing duplicate counter like " (1)" appended by the OS / downloads.
+# Limited to 1-3 digits so a legitimate 4-digit year "(2024)" is preserved.
+_TRAILING_NUM_RE = re.compile(r"\s*\(\d{1,3}\)$")
+
+# Emoji / pictographic symbol ranges to strip. Deliberately excludes General
+# Punctuation (U+2000–206F) so the curly apostrophe ’ in names is preserved.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"   # emoji, symbols & pictographs, supplemental
+    "\U00002600-\U000027BF"   # misc symbols + dingbats
+    "\U00002300-\U000023FF"   # misc technical (⏰ ⌚ …)
+    "\U00002B00-\U00002BFF"   # misc symbols and arrows (★ …)
+    "\U00002190-\U000021FF"   # arrows
+    "\U0001F1E6-\U0001F1FF"   # regional indicator flags
+    "\U0000FE00-\U0000FE0F"   # variation selectors
+    "‍⃣™ℹⓂ"  # ZWJ, keycap, ™ ℹ Ⓜ
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def clean_title(name: str) -> str:
+    """Clean a filename stem into a display title: drop ``[videoid]`` groups,
+    ``#hashtags``, a trailing ``(N)`` counter and emojis/icons, turn underscores
+    into spaces and collapse whitespace. Hyphens, ``&`` and the curly apostrophe
+    are preserved (e.g. ``Coca-Cola's``)."""
+    s = name.replace("_", " ")
+    s = _BRACKET_RE.sub(" ", s)
+    s = _HASHTAG_RE.sub(" ", s)
+    s = _EMOJI_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = _TRAILING_NUM_RE.sub("", s).strip()
+    return s.strip(" -|·•").strip()
 
 # Standard output canvas sizes (width, height).
 CANVAS_SIZES = {
@@ -74,12 +115,15 @@ class Layout:
     title_source: str = "filename"   # whisper | filename | manual
 
     video: Region = field(default_factory=lambda: Region(0.05, 0.28, 0.90, 0.40))
-    video_fit: str = "fit"           # fit | fill | free
+    video_fit: str = "fit"           # fit | fill | crop | free
+    video_crop_x: float = 0.5        # crop focal point in source (0..1), crop mode
+    video_crop_y: float = 0.5
 
     desc: Region = field(default_factory=lambda: Region(0.08, 0.78, 0.84, 0.17))
     desc_style: TextStyle = field(default_factory=lambda: TextStyle(size_pt=34))
     desc_text: str = "Description..."
     desc_source: str = "whisper"
+    show_desc: bool = True            # render the description frame at all
 
     bg_mode: str = "blur"            # blur | color
     bg_blur: int = 20
@@ -101,6 +145,7 @@ class Layout:
         if not d:
             return lay
         for key in ("aspect", "title_text", "title_source", "video_fit",
+                    "video_crop_x", "video_crop_y", "show_desc",
                     "desc_text", "desc_source", "bg_mode", "bg_blur",
                     "bg_color", "audio_speed", "audio_volume"):
             if key in d:

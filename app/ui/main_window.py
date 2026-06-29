@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from ..core import config as cfg
 from ..core.batch_processor import BatchWorker
-from ..core.layout_model import VIDEO_EXTS, Layout, Region
+from ..core.layout_model import VIDEO_EXTS, Layout, Region, clean_title
 from ..core.transcribe import whisper_available
 from ..core.video_probe import extract_frame
 from .preview_canvas import PreviewCanvas
@@ -191,10 +191,15 @@ class MainWindow(QMainWindow):
         self.fit_combo = QComboBox()
         self.fit_combo.addItem("Vừa khung (fit)", "fit")
         self.fit_combo.addItem("Lấp đầy (fill)", "fill")
+        self.fit_combo.addItem("Cắt & kéo (crop)", "crop")
         self.fit_combo.addItem("Kéo giãn (free)", "free")
         self.fit_combo.currentIndexChanged.connect(self._on_fit_changed)
         row.addWidget(self.fit_combo, 1)
         v.addLayout(row)
+        hint = QLabel("Chế độ 'Cắt & kéo': kéo video trong khung để chọn phần hiển thị.")
+        hint.setStyleSheet("color:#8a93a6;")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
         self._add_pos_sliders(v, "video")
         return g
 
@@ -218,6 +223,15 @@ class MainWindow(QMainWindow):
         style = getattr(self.layout_data, f"{name}_style")
         g = QGroupBox(title)
         v = QVBoxLayout(g)
+
+        if name == "desc":
+            self.show_desc_check = QCheckBox("Hiện khung mô tả")
+            self.show_desc_check.setChecked(self.layout_data.show_desc)
+            self.show_desc_check.setToolTip(
+                "Nếu bật mà không nhập mô tả, khung mô tả vẫn được hiển thị.")
+            self.show_desc_check.toggled.connect(self._on_show_desc_changed)
+            v.addWidget(self.show_desc_check)
+
         f = QFormLayout()
 
         edit = QLineEdit(getattr(self.layout_data, f"{name}_text"))
@@ -356,7 +370,7 @@ class MainWindow(QMainWindow):
         # show filename in any field whose source is 'filename'
         for name, combo in (("title", self.title_src), ("desc", self.desc_src)):
             if combo.currentData() == "filename":
-                self._set_text_field(name, first.stem.replace("_", " "))
+                self._set_text_field(name, clean_title(first.stem))
         self.status_lbl.setText(f"Đã nạp {len(vids)} video. Xem trước: {first.name}")
 
     def _set_text_field(self, name: str, text: str) -> None:
@@ -375,6 +389,10 @@ class MainWindow(QMainWindow):
     def _on_fit_changed(self) -> None:
         self.layout_data.video_fit = self.fit_combo.currentData()
         self.canvas.refresh_text()
+
+    def _on_show_desc_changed(self, on: bool) -> None:
+        self.layout_data.show_desc = on
+        self.canvas.set_desc_visible(on)
 
     def _on_bg_changed(self, *_) -> None:
         self.layout_data.bg_mode = self.bg_mode.currentData()
@@ -407,7 +425,7 @@ class MainWindow(QMainWindow):
         src = combo.currentData()
         setattr(self.layout_data, f"{name}_source", src)
         if src == "filename" and self._current_stem:
-            self._set_text_field(name, self._current_stem.replace("_", " "))
+            self._set_text_field(name, clean_title(self._current_stem))
 
     def _on_audio_changed(self, *_) -> None:
         self.layout_data.audio_speed = self.audio_speed.value()
@@ -555,6 +573,7 @@ class MainWindow(QMainWindow):
         lay = self.layout_data
         (self.rb_916 if lay.aspect == "9:16" else self.rb_169).setChecked(True)
         self.fit_combo.setCurrentIndex(max(0, self.fit_combo.findData(lay.video_fit)))
+        self.show_desc_check.setChecked(lay.show_desc)
         self.bg_mode.setCurrentIndex(max(0, self.bg_mode.findData(lay.bg_mode)))
         self.bg_blur.setValue(lay.bg_blur)
         self.bg_color.setColor(lay.bg_color)

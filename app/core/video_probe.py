@@ -39,6 +39,7 @@ def _ffmpeg_info(path: str) -> tuple[Optional[float], bool, Optional[tuple[int, 
         proc = subprocess.run(
             [ffmpeg_runner.get_ffmpeg(), "-hide_banner", "-i", path],
             capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             creationflags=ffmpeg_runner.NO_WINDOW,
         )
     except Exception:

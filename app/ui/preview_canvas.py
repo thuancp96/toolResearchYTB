@@ -52,6 +52,11 @@ class PreviewCanvas(QGraphicsView):
             item.setZValue(1 if name == "video" else 2)
             self._scene.addItem(item)
             item.geometryChanged.connect(self._on_item_changed)
+        self._items["video"].cropChanged.connect(self._on_crop_changed)
+        # The description box shows its frame (not a placeholder) when empty.
+        self._items["desc"].set_empty_label(False)
+        # The title auto-shrinks to fit and is clamped to 2 lines (matches render).
+        self._items["title"].set_text_fit(True, 2)
 
         self.set_layout(layout)
 
@@ -70,8 +75,10 @@ class PreviewCanvas(QGraphicsView):
         self._scene.setSceneRect(0, 0, cw, ch)
         self._items["video"].set_scene_rect(self._region_rect(layout.video))
         self._items["video"].set_fit(layout.video_fit)
+        self._items["video"].set_crop(layout.video_crop_x, layout.video_crop_y)
         self._items["title"].set_scene_rect(self._region_rect(layout.title))
         self._items["desc"].set_scene_rect(self._region_rect(layout.desc))
+        self._items["desc"].setVisible(layout.show_desc)
         self.refresh_text()
         self._rebuild_bg()
         self._fit()
@@ -103,6 +110,10 @@ class PreviewCanvas(QGraphicsView):
         if name in self._items:
             self._items[name].setSelected(True)
 
+    def set_desc_visible(self, on: bool) -> None:
+        self._layout.show_desc = on
+        self._items["desc"].setVisible(on)
+
     # ---- background ----------------------------------------------------
     def refresh_bg(self) -> None:
         self._rebuild_bg()
@@ -127,6 +138,11 @@ class PreviewCanvas(QGraphicsView):
         self._bg_item.setPixmap(bgr_to_pixmap(blurred))
 
     # ---- sync ----------------------------------------------------------
+    def _on_crop_changed(self, cx: float, cy: float) -> None:
+        self._layout.video_crop_x = cx
+        self._layout.video_crop_y = cy
+        self.layoutChanged.emit(self._layout)
+
     def _on_item_changed(self) -> None:
         cw, ch = self._layout.canvas_size()
         for name in ("title", "video", "desc"):

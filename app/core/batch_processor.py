@@ -11,14 +11,14 @@ from typing import List
 from PySide6.QtCore import QThread, Signal
 
 from . import ffmpeg_runner
-from .layout_model import Layout
+from .layout_model import Layout, clean_title
 from .text_render import render_text_png
 from .transcribe import Transcriber
 from .video_probe import probe
 
 
 def _clean_stem(stem: str) -> str:
-    return stem.replace("_", " ").replace("-", " ").strip()
+    return clean_title(stem)
 
 
 def _first_sentence(text: str, limit: int = 70) -> str:
@@ -115,12 +115,18 @@ class BatchWorker(QThread):
             if lay.title_text.strip():
                 _, _, tw, th = lay.title.to_pixels(cw, ch)
                 p = str(tmp / f"cv_title_{idx}.png")
-                if render_text_png(lay.title_text, tw, th, lay.title_style, p):
+                # Auto-shrink the title font to fit the box width and clamp to a
+                # maximum of 2 lines (truncating with … if it overflows).
+                if render_text_png(lay.title_text, tw, th, lay.title_style, p,
+                                   auto_fit=True, max_lines=2):
                     title_png = p
-            if lay.desc_text.strip():
+            if lay.show_desc:
+                # Show the description frame even when there is no text — the
+                # box is still drawn (force=True) so the layout stays consistent.
                 _, _, dw, dh = lay.desc.to_pixels(cw, ch)
                 p = str(tmp / f"cv_desc_{idx}.png")
-                if render_text_png(lay.desc_text, dw, dh, lay.desc_style, p):
+                if render_text_png(lay.desc_text, dw, dh, lay.desc_style, p,
+                                   force=True):
                     desc_png = p
 
             out_path = self.out_dir / f"{stem}{suffix}{container}"

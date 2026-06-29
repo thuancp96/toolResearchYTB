@@ -46,11 +46,18 @@ def _atempo_chain(speed: float) -> str:
     return ",".join(f"atempo={f:.6f}" for f in factors)
 
 
-def _fg_filter(vw: int, vh: int, fit: str) -> tuple[str, bool]:
-    """Return (scale_filter, centered) for the foreground video box."""
-    if fit == "fill":
+def _fg_filter(vw: int, vh: int, fit: str,
+               cx: float = 0.5, cy: float = 0.5) -> tuple[str, bool]:
+    """Return (scale_filter, centered) for the foreground video box.
+
+    ``fill`` crops centered; ``crop`` crops at the (cx, cy) focal point chosen by
+    dragging the video in the preview."""
+    if fit in ("fill", "crop"):
+        cx = min(1.0, max(0.0, cx))
+        cy = min(1.0, max(0.0, cy))
         return (f"scale={vw}:{vh}:force_original_aspect_ratio=increase,"
-                f"crop={vw}:{vh},setsar=1", False)
+                f"crop={vw}:{vh}:(iw-{vw})*{cx:.4f}:(ih-{vh})*{cy:.4f},"
+                f"setsar=1", False)
     if fit == "free":
         return (f"scale={vw}:{vh},setsar=1", False)
     # default: fit (letterbox-free, centered inside the box)
@@ -67,7 +74,8 @@ def build_filter_complex(layout: Layout, fps: float, has_audio: bool,
 
     # --- foreground source (with optional speed change) ---
     setpts = f"setpts=PTS/{speed:.6f}"
-    fg_scale, centered = _fg_filter(vw, vh, layout.video_fit)
+    fg_scale, centered = _fg_filter(vw, vh, layout.video_fit,
+                                    layout.video_crop_x, layout.video_crop_y)
 
     if layout.bg_mode == "blur":
         blur = max(1, int(layout.bg_blur))
