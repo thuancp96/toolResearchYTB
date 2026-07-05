@@ -129,13 +129,21 @@ class BatchWorker(QThread):
                                    force=True):
                     desc_png = p
 
+            desc_img = None
+            if lay.show_desc and lay.desc_image_path:
+                if Path(lay.desc_image_path).is_file():
+                    desc_img = lay.desc_image_path
+                else:
+                    self.log.emit(
+                        f"  ⚠ Không tìm thấy ảnh mô tả: {lay.desc_image_path}")
+
             out_path = self.out_dir / f"{stem}{suffix}{container}"
             speed = max(0.1, lay.audio_speed)
             out_seconds = (info.duration / speed) if info.duration else 0.0
 
             cmd = ffmpeg_runner.build_command(
                 f, str(out_path), lay, info.fps, info.has_audio,
-                title_png, desc_png, out_opts)
+                title_png, desc_png, out_opts, desc_img)
             self.log.emit("  Đang render…")
             rc = ffmpeg_runner.run(
                 cmd, out_seconds,

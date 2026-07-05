@@ -47,12 +47,14 @@ class PreviewCanvas(QGraphicsView):
             "video": ResizableItem("video", self._region_rect(layout.video), "VIDEO"),
             "title": ResizableItem("title", self._region_rect(layout.title), "TITLE"),
             "desc": ResizableItem("desc", self._region_rect(layout.desc), "DESCRIPTION"),
+            "desc_img": ResizableItem("image", self._region_rect(layout.desc_img), "ẢNH"),
         }
         for name, item in self._items.items():
             item.setZValue(1 if name == "video" else 2)
             self._scene.addItem(item)
             item.geometryChanged.connect(self._on_item_changed)
         self._items["video"].cropChanged.connect(self._on_crop_changed)
+        self._items["desc_img"].cropChanged.connect(self._on_img_crop_changed)
         # The description box shows its frame (not a placeholder) when empty.
         self._items["desc"].set_empty_label(False)
         # The title auto-shrinks to fit and is clamped to 2 lines (matches render).
@@ -79,6 +81,10 @@ class PreviewCanvas(QGraphicsView):
         self._items["title"].set_scene_rect(self._region_rect(layout.title))
         self._items["desc"].set_scene_rect(self._region_rect(layout.desc))
         self._items["desc"].setVisible(layout.show_desc)
+        self._items["desc_img"].set_scene_rect(self._region_rect(layout.desc_img))
+        self._items["desc_img"].set_crop(layout.desc_img_crop_x,
+                                         layout.desc_img_crop_y)
+        self._load_desc_image()
         self.refresh_text()
         self._rebuild_bg()
         self._fit()
@@ -113,6 +119,23 @@ class PreviewCanvas(QGraphicsView):
     def set_desc_visible(self, on: bool) -> None:
         self._layout.show_desc = on
         self._items["desc"].setVisible(on)
+        self._items["desc_img"].setVisible(on and bool(self._layout.desc_image_path))
+
+    def set_desc_image(self, path: str) -> None:
+        """Set (or clear, with an empty path) the description image."""
+        self._layout.desc_image_path = path or ""
+        self._load_desc_image()
+
+    def set_desc_img_fit(self, fit: str) -> None:
+        self._layout.desc_img_fit = fit
+        self._items["desc_img"].set_fit(fit)
+
+    def _load_desc_image(self) -> None:
+        item = self._items["desc_img"]
+        path = self._layout.desc_image_path
+        pm = QPixmap(path) if path else QPixmap()
+        item.set_pixmap(None if pm.isNull() else pm, self._layout.desc_img_fit)
+        item.setVisible(self._layout.show_desc and bool(path) and not pm.isNull())
 
     # ---- background ----------------------------------------------------
     def refresh_bg(self) -> None:
@@ -143,9 +166,14 @@ class PreviewCanvas(QGraphicsView):
         self._layout.video_crop_y = cy
         self.layoutChanged.emit(self._layout)
 
+    def _on_img_crop_changed(self, cx: float, cy: float) -> None:
+        self._layout.desc_img_crop_x = cx
+        self._layout.desc_img_crop_y = cy
+        self.layoutChanged.emit(self._layout)
+
     def _on_item_changed(self) -> None:
         cw, ch = self._layout.canvas_size()
-        for name in ("title", "video", "desc"):
+        for name in ("title", "video", "desc", "desc_img"):
             r = self._items[name].scene_rect()
             region = getattr(self._layout, name)
             region.nx, region.ny = r.x() / cw, r.y() / ch

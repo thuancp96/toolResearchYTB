@@ -126,6 +126,14 @@ class Layout:
     desc_source: str = "whisper"
     show_desc: bool = True            # render the description frame at all
 
+    # Optional illustration image shown with the description; kept in its own
+    # region so it can be dragged/resized independently in the preview.
+    desc_image_path: str = ""
+    desc_img: Region = field(default_factory=lambda: Region(0.30, 0.56, 0.40, 0.18))
+    desc_img_fit: str = "fit"        # fit | fill | crop | free
+    desc_img_crop_x: float = 0.5     # crop focal point in source (0..1), crop mode
+    desc_img_crop_y: float = 0.5
+
     bg_mode: str = "blur"            # blur | color
     bg_blur: int = 20
     bg_color: str = "#000000"
@@ -147,11 +155,13 @@ class Layout:
             return lay
         for key in ("aspect", "title_text", "title_source", "video_fit",
                     "video_crop_x", "video_crop_y", "show_desc",
-                    "desc_text", "desc_source", "bg_mode", "bg_blur",
+                    "desc_text", "desc_source", "desc_image_path",
+                    "desc_img_fit", "desc_img_crop_x", "desc_img_crop_y",
+                    "bg_mode", "bg_blur",
                     "bg_color", "audio_speed", "audio_volume"):
             if key in d:
                 setattr(lay, key, d[key])
-        for rkey in ("title", "video", "desc"):
+        for rkey in ("title", "video", "desc", "desc_img"):
             if rkey in d and isinstance(d[rkey], dict):
                 setattr(lay, rkey, Region(**d[rkey]))
         for skey in ("title_style", "desc_style"):

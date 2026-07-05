@@ -131,7 +131,7 @@ class ResizableItem(QGraphicsObject):
         scale = self._view_scale()
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
 
-        if self.kind == "video":
+        if self.kind in ("video", "image"):
             if self._pixmap and not self._pixmap.isNull():
                 painter.save()
                 painter.setClipRect(r)
@@ -297,7 +297,7 @@ class ResizableItem(QGraphicsObject):
 
     # ---- mouse ---------------------------------------------------------
     def _can_pan(self) -> bool:
-        return (self.kind == "video" and self._fit == "crop"
+        return (self.kind in ("video", "image") and self._fit == "crop"
                 and self._pixmap is not None and not self._pixmap.isNull())
 
     def hoverMoveEvent(self, event):

@@ -65,7 +65,8 @@ def _fg_filter(vw: int, vh: int, fit: str,
 
 
 def build_filter_complex(layout: Layout, fps: float, has_audio: bool,
-                         title_idx: Optional[int], desc_idx: Optional[int]) -> str:
+                         title_idx: Optional[int], desc_idx: Optional[int],
+                         img_idx: Optional[int] = None) -> str:
     cw, ch = layout.canvas_size()
     speed = max(0.1, float(layout.audio_speed))
 
@@ -106,6 +107,20 @@ def build_filter_complex(layout: Layout, fps: float, has_audio: bool,
         dx, dy, _, _ = layout.desc.to_pixels(cw, ch)
         parts.append(f"[{last}][{desc_idx}:v]overlay={dx}:{dy}[d]")
         last = "d"
+    if img_idx is not None:
+        # Description image: same fit modes as the video box (fit/fill/crop/free).
+        ix, iy, iw, ih = layout.desc_img.to_pixels(cw, ch)
+        img_scale, img_centered = _fg_filter(iw, ih, layout.desc_img_fit,
+                                             layout.desc_img_crop_x,
+                                             layout.desc_img_crop_y)
+        parts.append(f"[{img_idx}:v]{img_scale}[dimg]")
+        if img_centered:
+            iox = f"{ix}+({iw}-w)/2"
+            ioy = f"{iy}+({ih}-h)/2"
+        else:
+            iox, ioy = str(ix), str(iy)
+        parts.append(f"[{last}][dimg]overlay={iox}:{ioy}[i]")
+        last = "i"
 
     parts.append(f"[{last}]format=yuv420p[vout]")
 
@@ -118,10 +133,10 @@ def build_filter_complex(layout: Layout, fps: float, has_audio: bool,
 
 def build_command(input_path: str, output_path: str, layout: Layout, fps: float,
                   has_audio: bool, title_png: Optional[str], desc_png: Optional[str],
-                  out_opts: dict) -> List[str]:
+                  out_opts: dict, desc_img: Optional[str] = None) -> List[str]:
     cmd: List[str] = [get_ffmpeg(), "-y", "-hide_banner", "-i", input_path]
     idx = 1
-    title_idx = desc_idx = None
+    title_idx = desc_idx = img_idx = None
     if title_png:
         cmd += ["-i", title_png]
         title_idx = idx
@@ -130,8 +145,13 @@ def build_command(input_path: str, output_path: str, layout: Layout, fps: float,
         cmd += ["-i", desc_png]
         desc_idx = idx
         idx += 1
+    if desc_img:
+        cmd += ["-i", desc_img]
+        img_idx = idx
+        idx += 1
 
-    graph = build_filter_complex(layout, fps, has_audio, title_idx, desc_idx)
+    graph = build_filter_complex(layout, fps, has_audio, title_idx, desc_idx,
+                                 img_idx)
     cmd += ["-filter_complex", graph, "-map", "[vout]"]
     cmd += ["-map", "[aout]"] if has_audio else ["-an"]
 

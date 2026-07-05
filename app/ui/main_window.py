@@ -232,6 +232,38 @@ class MainWindow(QMainWindow):
             self.show_desc_check.toggled.connect(self._on_show_desc_changed)
             v.addWidget(self.show_desc_check)
 
+            img_btn = QPushButton("Thêm ảnh…")
+            img_btn.clicked.connect(self._pick_desc_image)
+            img_clear = QPushButton("✕")
+            img_clear.setFixedWidth(28)
+            img_clear.setToolTip("Bỏ ảnh mô tả")
+            img_clear.clicked.connect(self._clear_desc_image)
+            self.desc_img_lbl = QLabel("(chưa có ảnh)")
+            irow = QHBoxLayout()
+            irow.addWidget(QLabel("Ảnh minh họa:"))
+            irow.addWidget(img_btn)
+            irow.addWidget(img_clear)
+            irow.addWidget(self.desc_img_lbl, 1)
+            v.addLayout(irow)
+
+            self.img_fit_combo = QComboBox()
+            self.img_fit_combo.addItem("Vừa khung (fit)", "fit")
+            self.img_fit_combo.addItem("Lấp đầy (fill)", "fill")
+            self.img_fit_combo.addItem("Cắt & kéo (crop)", "crop")
+            self.img_fit_combo.addItem("Kéo giãn (free)", "free")
+            self.img_fit_combo.currentIndexChanged.connect(self._on_img_fit_changed)
+            frow_img = QHBoxLayout()
+            frow_img.addWidget(QLabel("Chế độ ảnh:"))
+            frow_img.addWidget(self.img_fit_combo, 1)
+            v.addLayout(frow_img)
+
+            hint = QLabel("Kéo ảnh trong preview để đổi vị trí; kéo cạnh/góc để "
+                          "chỉnh độ rộng. Chế độ 'Cắt & kéo': kéo nội dung ảnh "
+                          "trong khung để chọn phần hiển thị.")
+            hint.setStyleSheet("color:#8a93a6;")
+            hint.setWordWrap(True)
+            v.addWidget(hint)
+
         f = QFormLayout()
 
         edit = QLineEdit(getattr(self.layout_data, f"{name}_text"))
@@ -404,6 +436,23 @@ class MainWindow(QMainWindow):
     def _on_show_desc_changed(self, on: bool) -> None:
         self.layout_data.show_desc = on
         self.canvas.set_desc_visible(on)
+
+    def _pick_desc_image(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn ảnh minh họa", "",
+            "Ảnh (*.png *.jpg *.jpeg *.bmp *.webp)")
+        if path:
+            self.layout_data.desc_image_path = path
+            self.desc_img_lbl.setText(Path(path).name)
+            self.canvas.set_desc_image(path)
+
+    def _clear_desc_image(self) -> None:
+        self.layout_data.desc_image_path = ""
+        self.desc_img_lbl.setText("(chưa có ảnh)")
+        self.canvas.set_desc_image("")
+
+    def _on_img_fit_changed(self) -> None:
+        self.canvas.set_desc_img_fit(self.img_fit_combo.currentData())
 
     def _on_bg_changed(self, *_) -> None:
         self.layout_data.bg_mode = self.bg_mode.currentData()
@@ -588,6 +637,11 @@ class MainWindow(QMainWindow):
         (self.rb_916 if lay.aspect == "9:16" else self.rb_169).setChecked(True)
         self.fit_combo.setCurrentIndex(max(0, self.fit_combo.findData(lay.video_fit)))
         self.show_desc_check.setChecked(lay.show_desc)
+        self.desc_img_lbl.setText(
+            Path(lay.desc_image_path).name if lay.desc_image_path
+            else "(chưa có ảnh)")
+        self.img_fit_combo.setCurrentIndex(
+            max(0, self.img_fit_combo.findData(lay.desc_img_fit)))
         self.bg_mode.setCurrentIndex(max(0, self.bg_mode.findData(lay.bg_mode)))
         self.bg_blur.setValue(lay.bg_blur)
         self.bg_color.setColor(lay.bg_color)
