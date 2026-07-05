@@ -209,7 +209,9 @@ class ResizableItem(QGraphicsObject):
         return f
 
     def _paint_text_box(self, painter, r: QRectF) -> None:
-        if self._style.bg_enabled:
+        tight = (self._style.bg_enabled
+                 and getattr(self._style, "bg_style", "box") == "tight")
+        if self._style.bg_enabled and not tight:
             painter.fillRect(r, QColor(self._style.bg_color))
         text = self._text.strip()
         if not text:
@@ -234,11 +236,12 @@ class ResizableItem(QGraphicsObject):
         font = self._font_px(px)
         fm = QFontMetricsF(font)
         painter.setFont(font)
-        painter.setPen(QColor(self._style.color))
         line_h = fm.height()
         spacing = line_h * 0.18
         total_h = len(lines) * line_h + max(0, len(lines) - 1) * spacing
         y = inner.y() + max(0.0, (inner.height() - total_h) / 2)
+
+        placed = []
         for ln in lines:
             lw = fm.horizontalAdvance(ln)
             if self._style.align == "left":
@@ -247,8 +250,30 @@ class ResizableItem(QGraphicsObject):
                 x = inner.x() + inner.width() - lw
             else:
                 x = inner.x() + (inner.width() - lw) / 2
-            painter.drawText(QPointF(x, y + fm.ascent()), ln)
+            placed.append((ln, x, y, lw))
             y += line_h + spacing
+
+        if tight:
+            # Rounded pill hugging each line (mirrors core.text_render).
+            pad_x = line_h * 0.35
+            pad_y = line_h * 0.10
+            radius = line_h * 0.30
+            painter.save()
+            painter.setClipRect(r)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(self._style.bg_color))
+            for ln, x, ly, lw in placed:
+                if not ln.strip():
+                    continue
+                painter.drawRoundedRect(
+                    QRectF(x - pad_x, ly - pad_y,
+                           lw + 2 * pad_x, line_h + 2 * pad_y),
+                    radius, radius)
+            painter.restore()
+
+        painter.setPen(QColor(self._style.color))
+        for ln, x, ly, lw in placed:
+            painter.drawText(QPointF(x, ly + fm.ascent()), ln)
 
     def _draw_pixmap(self, painter, r: QRectF) -> None:
         pm = self._pixmap

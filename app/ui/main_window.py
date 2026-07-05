@@ -256,6 +256,17 @@ class MainWindow(QMainWindow):
         crow.addWidget(bg_color)
         crow.addStretch(1)
 
+        if name == "title":
+            bg_style = QComboBox()
+            bg_style.addItem("Nền phủ kín khung", "box")
+            bg_style.addItem("Nền bo góc sát chữ", "tight")
+            bg_style.setCurrentIndex(
+                max(0, bg_style.findData(style.bg_style)))
+            bg_style.currentIndexChanged.connect(
+                lambda i, n=name: self._on_style_changed(n))
+            f.addRow("Kiểu nền chữ:", bg_style)
+            setattr(self, f"{name}_bgstyle", bg_style)
+
         align = QComboBox()
         align.addItem("Trái", "left")
         align.addItem("Giữa", "center")
@@ -417,6 +428,9 @@ class MainWindow(QMainWindow):
         style.color = getattr(self, f"{name}_color").color()
         style.bg_color = getattr(self, f"{name}_bgcolor").color()
         style.bg_enabled = getattr(self, f"{name}_bgon").isChecked()
+        bgstyle_combo = getattr(self, f"{name}_bgstyle", None)
+        if bgstyle_combo is not None:
+            style.bg_style = bgstyle_combo.currentData()
         style.align = getattr(self, f"{name}_align").currentData()
         self.canvas.refresh_text()
 
@@ -586,6 +600,11 @@ class MainWindow(QMainWindow):
             getattr(self, f"{name}_color").setColor(style.color)
             getattr(self, f"{name}_bgcolor").setColor(style.bg_color)
             getattr(self, f"{name}_bgon").setChecked(style.bg_enabled)
+            bgstyle_combo = getattr(self, f"{name}_bgstyle", None)
+            if bgstyle_combo is not None:
+                bgstyle_combo.setCurrentIndex(max(
+                    0, bgstyle_combo.findData(
+                        getattr(style, "bg_style", "box"))))
             getattr(self, f"{name}_align").setCurrentIndex(
                 max(0, getattr(self, f"{name}_align").findData(style.align)))
             getattr(self, f"{name}_src").setCurrentIndex(

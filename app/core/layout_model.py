@@ -102,6 +102,7 @@ class TextStyle:
     color: str = "#000000"
     bg_color: str = "#ffffff"
     bg_enabled: bool = True
+    bg_style: str = "box"      # box = full khung | tight = bo góc ôm sát chữ
     align: str = "center"      # left | center | right
 
 

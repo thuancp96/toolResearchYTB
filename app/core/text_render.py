@@ -133,7 +133,8 @@ def render_text_png(text: str, w: int, h: int, style: TextStyle, out_path: str,
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    if style.bg_enabled:
+    tight = style.bg_enabled and getattr(style, "bg_style", "box") == "tight"
+    if style.bg_enabled and not tight:
         draw.rectangle([0, 0, w - 1, h - 1], fill=_hex_to_rgba(style.bg_color, 255))
 
     if not has_text:
@@ -158,7 +159,7 @@ def render_text_png(text: str, w: int, h: int, style: TextStyle, out_path: str,
     total_h = len(lines) * line_h + max(0, len(lines) - 1) * spacing
     y = max(pad, (h - total_h) // 2)
 
-    fill = _hex_to_rgba(style.color, 255)
+    placed = []
     for line in lines:
         lw = draw.textlength(line, font=font)
         if style.align == "left":
@@ -167,8 +168,25 @@ def render_text_png(text: str, w: int, h: int, style: TextStyle, out_path: str,
             x = w - pad - lw
         else:
             x = (w - lw) / 2
-        draw.text((x, y), line, font=font, fill=fill)
+        placed.append((line, x, y, lw))
         y += line_h + spacing
+
+    if tight:
+        # Rounded pill hugging each line (mirrors the preview).
+        pad_x = line_h * 0.35
+        pad_y = line_h * 0.10
+        radius = max(1, int(line_h * 0.30))
+        bg = _hex_to_rgba(style.bg_color, 255)
+        for line, x, ly, lw in placed:
+            if not line.strip():
+                continue
+            draw.rounded_rectangle(
+                [x - pad_x, ly - pad_y, x + lw + pad_x, ly + line_h + pad_y],
+                radius=radius, fill=bg)
+
+    fill = _hex_to_rgba(style.color, 255)
+    for line, x, ly, lw in placed:
+        draw.text((x, ly), line, font=font, fill=fill)
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     img.save(out_path)
