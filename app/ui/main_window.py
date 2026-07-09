@@ -23,6 +23,7 @@ from ..core.video_probe import extract_frame
 from .preview_canvas import PreviewCanvas
 from .widgets import ColorButton, FloatSlider, FolderPicker
 from .youtube_tab import YouTubeTab
+from .image_gen_tab import ImageGenTab
 
 DARK_QSS = """
 QWidget { background:#1f2430; color:#dfe5ef; font-size:12px; }
@@ -77,6 +78,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(central, "Ghép Video")
         self.youtube_tab = YouTubeTab()
         self.tabs.addTab(self.youtube_tab, "YouTube Finder")
+        self.image_gen_tab = ImageGenTab()
+        self.tabs.addTab(self.image_gen_tab, "Tạo ảnh AI")
         self.setCentralWidget(self.tabs)
 
     def _build_top_bar(self) -> QHBoxLayout:
@@ -603,6 +606,7 @@ class MainWindow(QMainWindow):
                 "suffix": self.suffix_edit.text(),
             },
             "youtube": self.youtube_tab.collect_config(),
+            "image_gen": self.image_gen_tab.collect_config(),
         }
 
     def _apply(self, d: dict) -> None:
@@ -628,6 +632,7 @@ class MainWindow(QMainWindow):
         self.suffix_edit.setText(o.get("suffix", "_out"))
 
         self.youtube_tab.apply_config(d.get("youtube", {}))
+        self.image_gen_tab.apply_config(d.get("image_gen", {}))
 
         # reflect layout into all widgets + canvas
         self._reflect_layout()
@@ -698,4 +703,5 @@ class MainWindow(QMainWindow):
             self.worker.stop()
             self.worker.wait(3000)
         self.youtube_tab.stop_worker()
+        self.image_gen_tab.stop_worker()
         super().closeEvent(event)
