@@ -11,9 +11,9 @@ from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog,
     QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
-    QLineEdit, QMenu, QMessageBox, QProgressBar, QPushButton, QSpinBox,
-    QStyle, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QSpinBox, QStyle, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from ..core.channel_finder import INT_MAX, ChannelFinderWorker, FinderConfig
@@ -159,12 +159,15 @@ class YouTubeTab(QWidget):
         g = QGroupBox("Cấu hình tìm kiếm")
         grid = QGridLayout(g)
 
-        self.api_key = QLineEdit()
-        self.api_key.setEchoMode(QLineEdit.Password)
+        self.api_key = QPlainTextEdit()
         self.api_key.setPlaceholderText(
-            "Dán YouTube Data API key (hoặc đặt biến môi trường YOUTUBE_API_KEY)")
-        self.api_key.setText(DEFAULT_API_KEY)
-        grid.addWidget(QLabel("API key:"), 0, 0)
+            "Mỗi dòng 1 YouTube Data API key — hết quota key 1 sẽ tự chuyển "
+            "sang key 2… (hoặc đặt biến môi trường YOUTUBE_API_KEY)")
+        self.api_key.setPlainText(DEFAULT_API_KEY)
+        self.api_key.setFixedHeight(
+            self.api_key.fontMetrics().lineSpacing() * 3 + 14)
+        self.api_key.setTabChangesFocus(True)
+        grid.addWidget(QLabel("API keys:"), 0, 0)
         grid.addWidget(self.api_key, 0, 1, 1, 5)
 
         self.keyword = QLineEdit()
@@ -188,6 +191,11 @@ class YouTubeTab(QWidget):
         self.top_trending = QCheckBox("TOP TRENDING (theo quốc gia)")
         self.top_trending.setToolTip(
             "Bỏ qua từ khóa, lấy video thịnh hành (mostPopular) theo khu vực.")
+        self.strict_region = QCheckBox("Chỉ kênh khai báo đúng quốc gia")
+        self.strict_region.setToolTip(
+            "Khi chọn khu vực, kênh khai báo quốc gia khác luôn bị loại.\n"
+            "Bật ô này để loại cả kênh KHÔNG khai báo quốc gia\n"
+            "(kết quả chuẩn hơn nhưng sẽ ít hơn đáng kể).")
 
         cells = [
             ("Từ khóa:", self.keyword), ("Khu vực:", self.region),
@@ -208,7 +216,9 @@ class YouTubeTab(QWidget):
             c = (i % 3) * 2
             grid.addWidget(QLabel(label), r, c)
             grid.addWidget(widget, r, c + 1)
-        grid.addWidget(self.top_trending, 1 + len(cells) // 3, 0, 1, 2)
+        last_row = 1 + len(cells) // 3
+        grid.addWidget(self.top_trending, last_row, 0, 1, 2)
+        grid.addWidget(self.strict_region, last_row, 2, 1, 2)
         return g
 
     def _build_download_bar(self) -> QHBoxLayout:
@@ -274,19 +284,28 @@ class YouTubeTab(QWidget):
             min_total_videos=self.min_total.value(),
             threads=self.threads.value(),
             top_trending=self.top_trending.isChecked(),
+            strict_region=self.strict_region.isChecked(),
         )
 
+    def _api_keys(self) -> list[str]:
+        """One key per line in the text area; env var as fallback."""
+        keys = [ln.strip() for ln in self.api_key.toPlainText().splitlines()
+                if ln.strip()]
+        if not keys and os.environ.get("YOUTUBE_API_KEY"):
+            keys = [os.environ["YOUTUBE_API_KEY"]]
+        return keys
+
     def _start(self) -> None:
-        key = self.api_key.text().strip() or os.environ.get("YOUTUBE_API_KEY", "")
-        if not key:
+        keys = self._api_keys()
+        if not keys:
             QMessageBox.warning(self, "Thiếu API key",
-                                "Nhập YouTube Data API key hoặc đặt biến môi "
-                                "trường YOUTUBE_API_KEY.")
+                                "Nhập YouTube Data API key (mỗi dòng 1 key) "
+                                "hoặc đặt biến môi trường YOUTUBE_API_KEY.")
             return
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self.progress.setRange(0, 0)  # busy until first progress tick
-        self.worker = ChannelFinderWorker(self._build_finder_config(), key)
+        self.worker = ChannelFinderWorker(self._build_finder_config(), keys)
         self.worker.channel_found.connect(self._add_row)
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self.status.setText)
@@ -539,7 +558,7 @@ class YouTubeTab(QWidget):
     # ------------------------------------------------------------------
     def collect_config(self) -> dict:
         return {
-            "api_key": self.api_key.text(),
+            "api_key": self.api_key.toPlainText(),
             "keyword": self.keyword.text(),
             "region": self._region_value(),
             "posted_days": self.posted_days.value(),
@@ -551,6 +570,7 @@ class YouTubeTab(QWidget):
             "min_total_videos": self.min_total.value(),
             "threads": self.threads.value(),
             "top_trending": self.top_trending.isChecked(),
+            "strict_region": self.strict_region.isChecked(),
             "dl_dir": self.dl_dir.path(),
             "dl_count": self.dl_count.value(),
             "dl_all": self.dl_all.isChecked(),
@@ -559,7 +579,7 @@ class YouTubeTab(QWidget):
     def apply_config(self, d: dict) -> None:
         if not d:
             return
-        self.api_key.setText(d.get("api_key") or DEFAULT_API_KEY)
+        self.api_key.setPlainText(d.get("api_key") or DEFAULT_API_KEY)
         self.keyword.setText(d.get("keyword", ""))
         code = d.get("region", "US")
         idx = self.region.findData(code)
@@ -579,6 +599,7 @@ class YouTubeTab(QWidget):
         self.min_total.setValue(d.get("min_total_videos", 0))
         self.threads.setValue(d.get("threads", 5))
         self.top_trending.setChecked(d.get("top_trending", False))
+        self.strict_region.setChecked(d.get("strict_region", False))
         self.dl_dir.setPath(d.get("dl_dir", ""))
         self.dl_count.setValue(d.get("dl_count", 5))
         self.dl_all.setChecked(d.get("dl_all", False))

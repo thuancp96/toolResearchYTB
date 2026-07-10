@@ -7,18 +7,66 @@ by monkeypatching ``_http_get_json``.
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Callable, List, Optional, Sequence, Union
 
 API_BASE = "https://www.googleapis.com/youtube/v3"
 
 
 class YouTubeApiError(Exception):
     pass
+
+
+class QuotaExceededError(YouTubeApiError):
+    """The API key ran out of quota (HTTP 403 quotaExceeded and friends)."""
+
+
+_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded",
+                  "userRateLimitExceeded"}
+
+
+class KeyPool:
+    """Ordered pool of API keys; advances to the next key when one hits quota.
+
+    Thread-safe: ``_enrich`` runs in a ThreadPoolExecutor, so several requests
+    may report quota exhaustion for the same key concurrently.
+    """
+
+    def __init__(self, keys: Sequence[str],
+                 on_rotate: Optional[Callable[[int, int], None]] = None):
+        self._keys = [k.strip() for k in keys if k and k.strip()]
+        if not self._keys:
+            raise ValueError("Cần ít nhất 1 API key")
+        self._idx = 0
+        self._lock = threading.Lock()
+        self._on_rotate = on_rotate
+
+    def current(self) -> tuple:
+        """Return (key, index) of the active key."""
+        with self._lock:
+            return self._keys[self._idx], self._idx
+
+    def report_exhausted(self, idx: int) -> bool:
+        """Mark the key at ``idx`` as out of quota.
+
+        Returns True if another key is available (caller should retry),
+        False when the whole pool is exhausted.
+        """
+        with self._lock:
+            if idx != self._idx:        # another thread already rotated
+                return True
+            if self._idx + 1 >= len(self._keys):
+                return False
+            self._idx += 1
+            rotate, pos, total = self._on_rotate, self._idx + 1, len(self._keys)
+        if rotate:
+            rotate(pos, total)
+        return True
 
 
 @dataclass
@@ -52,23 +100,40 @@ def _http_get_json(url: str, timeout: float = 20.0) -> dict:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace") if e.fp else ""
-        raise YouTubeApiError(_extract_error(body) or f"HTTP {e.code}") from e
+        msg, reasons = _extract_error(body)
+        if e.code == 403 and (reasons & _QUOTA_REASONS
+                              or "quota" in (msg or "").lower()):
+            raise QuotaExceededError(msg or "Hết quota API key") from e
+        raise YouTubeApiError(msg or f"HTTP {e.code}") from e
     except urllib.error.URLError as e:
         raise YouTubeApiError(f"Lỗi mạng: {e.reason}") from e
 
 
-def _extract_error(body: str) -> Optional[str]:
+def _extract_error(body: str) -> tuple:
+    """Return (message, {reason, ...}) from an API error body."""
     try:
-        return json.loads(body).get("error", {}).get("message")
+        err = json.loads(body).get("error", {})
+        reasons = {e.get("reason", "") for e in err.get("errors", [])}
+        return err.get("message"), reasons
     except (json.JSONDecodeError, AttributeError):
-        return None
+        return None, set()
 
 
-def _get(endpoint: str, params: dict, key: str) -> dict:
+def _get(endpoint: str, params: dict, key: Union[str, KeyPool]) -> dict:
     clean = {k: v for k, v in params.items() if v not in (None, "")}
-    clean["key"] = key
-    url = f"{API_BASE}/{endpoint}?" + urllib.parse.urlencode(clean)
-    return _http_get_json(url)
+    if not isinstance(key, KeyPool):
+        clean["key"] = key
+        url = f"{API_BASE}/{endpoint}?" + urllib.parse.urlencode(clean)
+        return _http_get_json(url)
+    while True:
+        k, idx = key.current()
+        clean["key"] = k
+        url = f"{API_BASE}/{endpoint}?" + urllib.parse.urlencode(clean)
+        try:
+            return _http_get_json(url)
+        except QuotaExceededError:
+            if not key.report_exhausted(idx):
+                raise
 
 
 def download_bytes(url: str, timeout: float = 10.0) -> bytes:
@@ -144,11 +209,22 @@ def _collect_channel_ids(endpoint: str, base_params: dict, key: str,
     return ids
 
 
+# regionCode alone only limits results to videos *viewable* in the region,
+# so pair it with the region's dominant language to bias relevance.
+REGION_LANG = {
+    "US": "en", "GB": "en", "AU": "en", "CA": "en", "PH": "en",
+    "JP": "ja", "VN": "vi", "KR": "ko", "IN": "hi", "DE": "de",
+    "FR": "fr", "BR": "pt", "RU": "ru", "ID": "id", "TH": "th",
+    "ES": "es", "MX": "es", "IT": "it",
+}
+
+
 def search_video_channel_ids(key: str, q: str, region: str, published_after: str,
                              max_results: int, order: str = "viewCount") -> List[str]:
     return _collect_channel_ids("search", {
         "part": "snippet", "q": q, "type": "video", "order": order,
         "regionCode": region or None, "publishedAfter": published_after or None,
+        "relevanceLanguage": REGION_LANG.get((region or "").upper()),
     }, key, max_results)
 
 

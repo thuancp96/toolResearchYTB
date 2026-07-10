@@ -34,6 +34,7 @@ class FinderConfig:
     min_total_videos: int = 0
     threads: int = 5
     top_trending: bool = False
+    strict_region: bool = False   # also drop channels with no declared country
 
 
 class ChannelFinderWorker(QThread):
@@ -43,11 +44,16 @@ class ChannelFinderWorker(QThread):
     status = Signal(str)
     finished_all = Signal(int)       # count emitted
 
-    def __init__(self, cfg: FinderConfig, key: str, parent=None):
+    def __init__(self, cfg: FinderConfig, keys, parent=None):
         super().__init__(parent)
         self.cfg = cfg
-        self.key = key
+        if isinstance(keys, str):
+            keys = [keys]
+        self.key = yt.KeyPool(keys, on_rotate=self._on_key_rotate)
         self._stop = threading.Event()
+
+    def _on_key_rotate(self, pos: int, total: int) -> None:
+        self.log.emit(f"⚠ API key hết quota → chuyển sang key {pos}/{total}")
 
     def stop(self) -> None:
         self._stop.set()
@@ -116,6 +122,14 @@ class ChannelFinderWorker(QThread):
     # ------------------------------------------------------------------
     def _passes(self, info: ChannelInfo) -> bool:
         c = self.cfg
+        # regionCode on the API only biases the search; enforce the country
+        # declared on the channel here so US really means US.
+        if c.region:
+            country = (info.country or "").upper()
+            if country and country != c.region.upper():
+                return False
+            if not country and c.strict_region:
+                return False
         if not (c.min_subs <= info.subs <= c.max_subs):
             return False
         if not (c.min_views <= info.total_views <= c.max_views):
