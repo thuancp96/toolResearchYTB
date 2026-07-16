@@ -287,6 +287,52 @@ def parse_prompt_line(line: str) -> tuple[str, str]:
     return "", line.strip()
 
 
+def normalize_prompts(text: str) -> list[str]:
+    """Turn the prompt box content into one prompt per entry.
+
+    Accepts both layouts — inline and block — even mixed::
+
+        [00:00] A cute stickman storyteller     ->  as-is
+
+        [00:05]
+        A cute stickman storyteller             ->  "[00:05] A cute stickman…"
+
+    A ``[mm:ss]`` line starts a prompt; following non-timestamp lines belong
+    to it (joined with spaces). Without any timestamp in the box, every
+    non-empty line is its own prompt (the original behaviour).
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines()]
+    if not any(TIMESTAMP_RE.match(ln) for ln in lines if ln):
+        return [ln for ln in lines if ln]
+
+    prompts: list[str] = []
+    cur_ts: str | None = None
+    cur_parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal cur_ts, cur_parts
+        if cur_ts is not None:
+            body = " ".join(cur_parts).strip()
+            prompts.append(f"[{cur_ts}] {body}".rstrip())
+        cur_ts, cur_parts = None, []
+
+    for ln in lines:
+        if not ln:
+            continue
+        m = TIMESTAMP_RE.match(ln)
+        if m:
+            flush()
+            cur_ts = m.group(1)
+            rest = m.group(2).strip()
+            cur_parts = [rest] if rest else []
+        elif cur_ts is not None:
+            cur_parts.append(ln)
+        else:  # loose line before the first timestamp
+            prompts.append(ln)
+    flush()
+    return prompts
+
+
 def build_filename(index: int, total: int, line: str, ext: str = ".png",
                    max_stem: int = 120) -> str:
     pad = max(3, len(str(total)))

@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import os
+
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
+    QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
+    QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from ..core.image_gen import CF_MODELS, DescribeWorker, ImageGenWorker
+from ..core import slideshow, tts
+from ..core.image_gen import (
+    CF_MODELS, DescribeWorker, ImageGenWorker, normalize_prompts,
+)
+from ..core.slideshow import VoiceVideoWorker
 from .widgets import FolderPicker
 
 COLS = ["#", "Prompt", "Trạng thái", "File"]
@@ -43,6 +49,10 @@ class ImageGenTab(QWidget):
         super().__init__(parent)
         self.worker: ImageGenWorker | None = None
         self.describe_worker: DescribeWorker | None = None
+        self.vv_worker: VoiceVideoWorker | None = None
+        self.voice_test_worker: tts.VoiceTestWorker | None = None
+        self._test_player = None
+        self._test_audio_out = None
         self._char_image_path = ""
         self._build()
 
@@ -54,6 +64,7 @@ class ImageGenTab(QWidget):
         root.addWidget(self._build_config())
         root.addWidget(self._build_character())
         root.addWidget(self._build_prompts(), 1)
+        root.addWidget(self._build_voice_video())
 
         row = QHBoxLayout()
         self.btn_start = QPushButton("▶ Bắt đầu tạo ảnh")
@@ -237,11 +248,11 @@ class ImageGenTab(QWidget):
             else "(chưa có ảnh)")
 
     def _build_prompts(self) -> QGroupBox:
-        g = QGroupBox("Prompt (mỗi dòng 1 prompt, vd: [00:15] Cô gái đi trong mưa)")
+        g = QGroupBox("Prompt (timestamp cùng dòng hoặc riêng dòng đều được)")
         lay = QVBoxLayout(g)
         self.prompts_edit = QPlainTextEdit()
         self.prompts_edit.setPlaceholderText(
-            "[00:15] Cô gái đi trong mưa\n[00:30] Bầu trời đêm đầy sao")
+            "[00:15] Cô gái đi trong mưa\n\n[00:30]\nBầu trời đêm đầy sao")
         self.prompts_edit.textChanged.connect(self._update_count)
         lay.addWidget(self.prompts_edit, 1)
 
@@ -270,12 +281,161 @@ class ImageGenTab(QWidget):
         self.table = t
         return t
 
+    def _build_voice_video(self) -> QGroupBox:
+        g = QGroupBox("Voice / Video từ script")
+        lay = QVBoxLayout(g)
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Chế độ:"))
+        self.vv_mode_combo = QComboBox()
+        for label, value in [("Không (chỉ tạo ảnh)", "none"),
+                             ("Tạo Voice (mp3)", "voice"),
+                             ("Tạo Video (mp4)", "video")]:
+            self.vv_mode_combo.addItem(label, value)
+        self.vv_mode_combo.currentIndexChanged.connect(self._on_vv_mode_changed)
+        mode_row.addWidget(self.vv_mode_combo, 1)
+        lay.addLayout(mode_row)
+
+        # Everything below collapses in "none" mode.
+        self.vv_body = QWidget()
+        body = QVBoxLayout(self.vv_body)
+        body.setContentsMargins(0, 0, 0, 0)
+
+        body.addWidget(QLabel(
+            "Script thoại (mỗi đoạn: [mm:ss] + lời thoại — \"Voice:\" "
+            "có hay không đều được):"))
+        self.vv_script_edit = QPlainTextEdit()
+        self.vv_script_edit.setPlaceholderText(
+            '[00:00]\nVoice: "Have you ever wondered why we yawn?"\n\n'
+            '[00:05] voice "Yawning is something every human does."\n\n'
+            '[00:10] Or just write the line right after the timestamp.')
+        self.vv_script_edit.setFixedHeight(110)
+        body.addWidget(self.vv_script_edit)
+
+        srow = QHBoxLayout()
+        btn_script = QPushButton("📂 Tải script .txt")
+        btn_script.clicked.connect(self._load_script_file)
+        srow.addWidget(btn_script)
+        srow.addStretch(1)
+        body.addLayout(srow)
+
+        vrow = QHBoxLayout()
+        vrow.addWidget(QLabel("Giọng đọc:"))
+        self.vv_voice_combo = QComboBox()
+        for label, voice_id in tts.VOICES:
+            self.vv_voice_combo.addItem(label, voice_id)
+        vrow.addWidget(self.vv_voice_combo, 1)
+        self.btn_voice_test = QPushButton("🔊 Nghe thử")
+        self.btn_voice_test.clicked.connect(self._vv_test_voice)
+        vrow.addWidget(self.btn_voice_test)
+        body.addLayout(vrow)
+
+        timing_row = QHBoxLayout()
+        timing_row.addWidget(QLabel("Thời lượng đoạn:"))
+        self.vv_timing_combo = QComboBox()
+        self.vv_timing_combo.addItem(
+            "Khớp mốc [mm:ss] trong script (tăng tốc giọng nếu cần)",
+            "timestamps")
+        self.vv_timing_combo.addItem("Tự nhiên theo giọng đọc", "auto")
+        self.vv_timing_combo.setToolTip(
+            "Khớp mốc: mỗi đoạn dài đúng bằng khoảng cách 2 mốc thời gian — "
+            "thoại dài hơn sẽ được đọc nhanh lên cho vừa, ngắn hơn thì thêm "
+            "khoảng lặng.\nTự nhiên: mỗi đoạn dài theo giọng đọc thật, "
+            "mốc chỉ dùng để khớp ảnh.")
+        timing_row.addWidget(self.vv_timing_combo, 1)
+        body.addLayout(timing_row)
+
+        # Video-only options.
+        self.vv_video_opts = QWidget()
+        vopts = QVBoxLayout(self.vv_video_opts)
+        vopts.setContentsMargins(0, 0, 0, 0)
+
+        trow = QHBoxLayout()
+        trow.addWidget(QLabel("Chuyển cảnh:"))
+        self.vv_transition_combo = QComboBox()
+        self.vv_transition_combo.addItem("Ngẫu nhiên", "random")
+        for name in slideshow.TRANSITIONS:
+            self.vv_transition_combo.addItem(name, name)
+        trow.addWidget(self.vv_transition_combo, 1)
+        self.vv_trans_dur = QDoubleSpinBox()
+        self.vv_trans_dur.setRange(0.2, 2.0)
+        self.vv_trans_dur.setSingleStep(0.1)
+        self.vv_trans_dur.setValue(0.5)
+        self.vv_trans_dur.setSuffix(" s")
+        trow.addWidget(QLabel("Thời lượng:"))
+        trow.addWidget(self.vv_trans_dur)
+        self.vv_pause = QDoubleSpinBox()
+        self.vv_pause.setRange(0.0, 2.0)
+        self.vv_pause.setSingleStep(0.1)
+        self.vv_pause.setValue(0.3)
+        self.vv_pause.setSuffix(" s")
+        trow.addWidget(QLabel("Nghỉ giữa câu:"))
+        trow.addWidget(self.vv_pause)
+        vopts.addLayout(trow)
+
+        sub_row = QHBoxLayout()
+        self.vv_sub_check = QCheckBox("Hiện phụ đề")
+        sub_row.addWidget(self.vv_sub_check)
+        sub_row.addWidget(QLabel("Hiệu ứng chữ:"))
+        self.vv_sub_effect_combo = QComboBox()
+        self.vv_sub_effect_combo.addItem("Không", "none")
+        self.vv_sub_effect_combo.addItem("Fade in/out", "fade")
+        sub_row.addWidget(self.vv_sub_effect_combo)
+        sub_row.addWidget(QLabel("Cỡ chữ:"))
+        self.vv_sub_size = QSpinBox()
+        self.vv_sub_size.setRange(16, 96)
+        self.vv_sub_size.setValue(40)
+        sub_row.addWidget(self.vv_sub_size)
+        sub_row.addWidget(QLabel("Vị trí:"))
+        self.vv_sub_pos_combo = QComboBox()
+        for label, value in [("Dưới", "bottom"), ("Giữa", "middle"),
+                             ("Trên", "top")]:
+            self.vv_sub_pos_combo.addItem(label, value)
+        sub_row.addWidget(self.vv_sub_pos_combo)
+        sub_row.addStretch(1)
+        vopts.addLayout(sub_row)
+        body.addWidget(self.vv_video_opts)
+
+        run_row = QHBoxLayout()
+        self.btn_vv_start = QPushButton("🎬 Tạo Voice/Video")
+        self.btn_vv_start.clicked.connect(self._vv_start)
+        self.btn_vv_stop = QPushButton("■ Dừng")
+        self.btn_vv_stop.setEnabled(False)
+        self.btn_vv_stop.clicked.connect(self._vv_stop)
+        self.vv_progress = QProgressBar()
+        self.vv_progress.setRange(0, 100)
+        run_row.addWidget(self.btn_vv_start)
+        run_row.addWidget(self.btn_vv_stop)
+        run_row.addWidget(self.vv_progress, 1)
+        body.addLayout(run_row)
+
+        self.vv_status = QLabel("")
+        body.addWidget(self.vv_status)
+
+        if not tts.tts_available():
+            note = QLabel("⚠ Chưa cài edge-tts — chạy: pip install edge-tts")
+            note.setStyleSheet("color:#e0b060;")
+            body.addWidget(note)
+            self.btn_vv_start.setEnabled(False)
+            self.btn_voice_test.setEnabled(False)
+
+        lay.addWidget(self.vv_body)
+        self._on_vv_mode_changed()
+        return g
+
+    def _vv_mode(self) -> str:
+        return self.vv_mode_combo.currentData()
+
+    def _on_vv_mode_changed(self) -> None:
+        mode = self._vv_mode()
+        self.vv_body.setVisible(mode != "none")
+        self.vv_video_opts.setVisible(mode == "video")
+
     # ------------------------------------------------------------------
     # prompts / keys
     # ------------------------------------------------------------------
     def _parse_prompts(self) -> list[str]:
-        return [ln.strip() for ln in self.prompts_edit.toPlainText().splitlines()
-                if ln.strip()]
+        return normalize_prompts(self.prompts_edit.toPlainText())
 
     def _parse_keys(self) -> list[str]:
         return [ln.strip() for ln in self.keys_edit.toPlainText().splitlines()
@@ -356,6 +516,124 @@ class ImageGenTab(QWidget):
             self.worker.wait(3000)
         if self.describe_worker and self.describe_worker.isRunning():
             self.describe_worker.wait(3000)
+        if self.vv_worker and self.vv_worker.isRunning():
+            self.vv_worker.stop()
+            self.vv_worker.wait(5000)
+        if self.voice_test_worker and self.voice_test_worker.isRunning():
+            self.voice_test_worker.wait(3000)
+
+    # ------------------------------------------------------------------
+    # voice / video from script
+    # ------------------------------------------------------------------
+    def _load_script_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn file script", "", "Text (*.txt);;Tất cả (*)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.vv_script_edit.setPlainText(f.read())
+        except OSError as e:
+            QMessageBox.warning(self, "Không đọc được file", str(e))
+
+    def _vv_start(self) -> None:
+        mode = self._vv_mode()
+        if mode == "none":
+            QMessageBox.information(
+                self, "Chưa chọn chế độ",
+                "Chọn 'Tạo Voice' hoặc 'Tạo Video' trước.")
+            return
+        out = self.out_dir.path()
+        if not out:
+            QMessageBox.warning(self, "Thiếu thư mục lưu",
+                                "Chọn thư mục lưu (chung với ảnh) trước.")
+            return
+        script = self.vv_script_edit.toPlainText()
+        segments = slideshow.parse_script(script)
+        if not segments:
+            QMessageBox.warning(
+                self, "Script trống",
+                "Dán script dạng:\n[00:00]\nVoice: \"…\"")
+            return
+        if mode == "video" and not slideshow.list_images(out):
+            QMessageBox.warning(
+                self, "Chưa có ảnh",
+                "Thư mục lưu chưa có ảnh nào — tạo ảnh trước rồi mới tạo video.")
+            return
+
+        w, h, _aspect = self.size_combo.currentData()
+        self.vv_worker = VoiceVideoWorker(
+            mode, script, out, self.vv_voice_combo.currentData(),
+            width=w, height=h,
+            transition=self.vv_transition_combo.currentData(),
+            trans_dur=self.vv_trans_dur.value(),
+            subtitles=self.vv_sub_check.isChecked(),
+            sub_effect=self.vv_sub_effect_combo.currentData(),
+            sub_size=self.vv_sub_size.value(),
+            sub_pos=self.vv_sub_pos_combo.currentData(),
+            pause=self.vv_pause.value(),
+            timing=self.vv_timing_combo.currentData())
+        self.vv_worker.status.connect(self.vv_status.setText)
+        self.vv_worker.log.connect(self.vv_status.setText)
+        self.vv_worker.progress.connect(
+            lambda p: self.vv_progress.setValue(int(p * 100)))
+        self.vv_worker.finished_job.connect(self._on_vv_done)
+        self.btn_vv_start.setEnabled(False)
+        self.btn_vv_stop.setEnabled(True)
+        self.vv_progress.setValue(0)
+        self.vv_status.setText("Bắt đầu…")
+        self.vv_worker.start()
+
+    def _vv_stop(self) -> None:
+        if self.vv_worker:
+            self.vv_worker.stop()
+        self.vv_status.setText("Đang dừng…")
+
+    def _on_vv_done(self, ok: bool, detail: str) -> None:
+        self.btn_vv_start.setEnabled(tts.tts_available())
+        self.btn_vv_stop.setEnabled(False)
+        if ok:
+            self.vv_status.setText(f"✓ Xong: {detail}")
+            QMessageBox.information(self, "Hoàn tất", f"Đã xuất:\n{detail}")
+        else:
+            self.vv_status.setText(f"✗ {detail}")
+
+    def _vv_test_voice(self) -> None:
+        if self.voice_test_worker and self.voice_test_worker.isRunning():
+            return
+        self.btn_voice_test.setEnabled(False)
+        self.vv_status.setText("Đang tạo câu nghe thử…")
+        self.voice_test_worker = tts.VoiceTestWorker(
+            self.vv_voice_combo.currentData())
+        self.voice_test_worker.done.connect(self._on_voice_test_done)
+        self.voice_test_worker.failed.connect(self._on_voice_test_failed)
+        self.voice_test_worker.start()
+
+    def _on_voice_test_done(self, path: str) -> None:
+        self.btn_voice_test.setEnabled(True)
+        self.vv_status.setText("Đang phát câu nghe thử…")
+        self._play_test_mp3(path)
+
+    def _on_voice_test_failed(self, msg: str) -> None:
+        self.btn_voice_test.setEnabled(True)
+        self.vv_status.setText("")
+        QMessageBox.warning(self, "Không nghe thử được", msg)
+
+    def _play_test_mp3(self, path: str) -> None:
+        try:
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+            # Keep both objects alive as attributes or playback stops.
+            self._test_audio_out = QAudioOutput()
+            self._test_audio_out.setVolume(1.0)
+            self._test_player = QMediaPlayer()
+            self._test_player.setAudioOutput(self._test_audio_out)
+            self._test_player.setSource(QUrl.fromLocalFile(path))
+            self._test_player.play()
+        except Exception:
+            try:
+                os.startfile(path)  # default mp3 app
+            except OSError as e:
+                QMessageBox.warning(self, "Không phát được audio", str(e))
 
     # ------------------------------------------------------------------
     # table
@@ -417,6 +695,17 @@ class ImageGenTab(QWidget):
             "describe_key": self.describe_key.text().strip(),
             "out_dir": self.out_dir.path(),
             "prompts": self.prompts_edit.toPlainText(),
+            "vv_mode": self._vv_mode(),
+            "vv_script": self.vv_script_edit.toPlainText(),
+            "vv_voice": self.vv_voice_combo.currentData(),
+            "vv_timing": self.vv_timing_combo.currentData(),
+            "vv_transition": self.vv_transition_combo.currentData(),
+            "vv_trans_dur": self.vv_trans_dur.value(),
+            "vv_pause": self.vv_pause.value(),
+            "vv_subtitles": self.vv_sub_check.isChecked(),
+            "vv_sub_effect": self.vv_sub_effect_combo.currentData(),
+            "vv_sub_size": self.vv_sub_size.value(),
+            "vv_sub_pos": self.vv_sub_pos_combo.currentData(),
         }
 
     def apply_config(self, d: dict) -> None:
@@ -437,3 +726,25 @@ class ImageGenTab(QWidget):
         self.describe_key.setText(d.get("describe_key", ""))
         self.out_dir.setPath(d.get("out_dir", ""))
         self.prompts_edit.setPlainText(d.get("prompts", ""))
+        i = self.vv_mode_combo.findData(d.get("vv_mode", "none"))
+        self.vv_mode_combo.setCurrentIndex(max(0, i))
+        self.vv_script_edit.setPlainText(d.get("vv_script", ""))
+        i = self.vv_voice_combo.findData(d.get("vv_voice", ""))
+        if i >= 0:
+            self.vv_voice_combo.setCurrentIndex(i)
+        i = self.vv_timing_combo.findData(d.get("vv_timing", "timestamps"))
+        if i >= 0:
+            self.vv_timing_combo.setCurrentIndex(i)
+        i = self.vv_transition_combo.findData(d.get("vv_transition", "random"))
+        if i >= 0:
+            self.vv_transition_combo.setCurrentIndex(i)
+        self.vv_trans_dur.setValue(float(d.get("vv_trans_dur", 0.5)))
+        self.vv_pause.setValue(float(d.get("vv_pause", 0.3)))
+        self.vv_sub_check.setChecked(bool(d.get("vv_subtitles", False)))
+        i = self.vv_sub_effect_combo.findData(d.get("vv_sub_effect", "none"))
+        if i >= 0:
+            self.vv_sub_effect_combo.setCurrentIndex(i)
+        self.vv_sub_size.setValue(int(d.get("vv_sub_size", 40)))
+        i = self.vv_sub_pos_combo.findData(d.get("vv_sub_pos", "bottom"))
+        if i >= 0:
+            self.vv_sub_pos_combo.setCurrentIndex(i)

@@ -11,3 +11,7 @@ faster-whisper>=1.0
 # Optional: download channel videos from the YouTube Finder tab.
 # Without it the app still runs; the "Tải video" action just warns.
 yt-dlp>=2024.1
+
+# Optional: text-to-speech + slideshow video in the "Tạo ảnh AI" tab.
+# Without it the app runs; the Voice/Video section is simply disabled.
+edge-tts>=6.1
