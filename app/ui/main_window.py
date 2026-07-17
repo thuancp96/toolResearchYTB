@@ -24,6 +24,7 @@ from .preview_canvas import PreviewCanvas
 from .widgets import ColorButton, FloatSlider, FolderPicker
 from .youtube_tab import YouTubeTab
 from .image_gen_tab import ImageGenTab
+from .review_tab import ReviewTab
 
 DARK_QSS = """
 QWidget { background:#1f2430; color:#dfe5ef; font-size:12px; }
@@ -35,6 +36,12 @@ QPushButton:hover { background:#3f7be6; }
 QPushButton:disabled { background:#3a435c; color:#8a93a6; }
 QProgressBar { background:#2a3142; border:1px solid #3a435c; border-radius:4px; text-align:center; }
 QProgressBar::chunk { background:#2f9bd6; border-radius:4px; }
+QTabWidget::pane { border:1px solid #36405a; border-top:2px solid #2f6bd6; }
+QTabBar::tab { background:#2a3142; color:#8a93a6; border:1px solid #36405a; border-bottom:none;
+    border-top-left-radius:6px; border-top-right-radius:6px; padding:8px 22px; margin-right:3px;
+    font-size:13px; font-weight:bold; }
+QTabBar::tab:hover { background:#343d52; color:#dfe5ef; }
+QTabBar::tab:selected { background:#2f6bd6; color:#ffffff; border-color:#2f6bd6; }
 """
 
 
@@ -80,7 +87,14 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.youtube_tab, "YouTube Finder")
         self.image_gen_tab = ImageGenTab()
         self.tabs.addTab(self.image_gen_tab, "Tạo ảnh AI")
+        self.review_tab = ReviewTab(keys_provider=self._review_gemini_keys)
+        self.tabs.addTab(self.review_tab, "Review Phim")
         self.setCentralWidget(self.tabs)
+
+    def _review_gemini_keys(self) -> list[str]:
+        keys = self.image_gen_tab._parse_keys()
+        dk = self.image_gen_tab.describe_key.text().strip()
+        return keys + ([dk] if dk else [])
 
     def _build_top_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -607,6 +621,7 @@ class MainWindow(QMainWindow):
             },
             "youtube": self.youtube_tab.collect_config(),
             "image_gen": self.image_gen_tab.collect_config(),
+            "review": self.review_tab.collect_config(),
         }
 
     def _apply(self, d: dict) -> None:
@@ -633,6 +648,7 @@ class MainWindow(QMainWindow):
 
         self.youtube_tab.apply_config(d.get("youtube", {}))
         self.image_gen_tab.apply_config(d.get("image_gen", {}))
+        self.review_tab.apply_config(d.get("review", {}))
 
         # reflect layout into all widgets + canvas
         self._reflect_layout()
@@ -704,4 +720,5 @@ class MainWindow(QMainWindow):
             self.worker.wait(3000)
         self.youtube_tab.stop_worker()
         self.image_gen_tab.stop_worker()
+        self.review_tab.stop_worker()
         super().closeEvent(event)
