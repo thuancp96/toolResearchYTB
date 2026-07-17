@@ -193,6 +193,24 @@ def match_images(segments: List[Segment], images: List[str],
         log(f"⚠ Có {extra} ảnh không khớp đoạn nào — bỏ qua.")
 
 
+def stage_image_inputs(segments: List[Segment], tmp_dir: str) -> None:
+    """Give image inputs short local names before invoking ffmpeg.
+
+    A slideshow command has an input argument for every image and audio
+    segment. Prompt-based filenames can make that Windows command exceed its
+    limit (WinError 206), so image data is staged under compact names.
+    """
+    for i, seg in enumerate(segments):
+        source = Path(seg.image_path)
+        suffix = source.suffix.lower() or ".png"
+        staged = Path(tmp_dir) / f"img_{i:04d}{suffix}"
+        try:
+            staged.hardlink_to(source)
+        except OSError:
+            shutil.copy2(source, staged)
+        seg.image_path = staged.name
+
+
 # --------------------------------------------------------------------------
 # Audio helpers (all shell out to the bundled ffmpeg)
 # --------------------------------------------------------------------------
@@ -542,7 +560,7 @@ class VoiceVideoWorker(QThread):
         self._stop.set()
 
     def run(self) -> None:
-        tmp = tempfile.mkdtemp(prefix="cv_voicevideo_")
+        tmp = tempfile.mkdtemp(prefix="cv_")
         try:
             out = self._run(tmp)
             self.finished_job.emit(True, out)
@@ -632,6 +650,7 @@ class VoiceVideoWorker(QThread):
             raise RuntimeError("Không tìm thấy ảnh nào trong thư mục lưu — "
                                "hãy tạo ảnh trước.")
         match_images(segments, images, self.log.emit)
+        stage_image_inputs(segments, tmp)
 
         subs: List[SubSpec] = []
         if self.subtitles:
@@ -648,22 +667,30 @@ class VoiceVideoWorker(QThread):
 
         graph = build_slideshow_graph(segments, self.width, self.height,
                                       self.fps, trans, d, subs)
-        graph_path = str(Path(tmp) / "graph.txt")
-        Path(graph_path).write_text(graph, encoding="utf-8")
+        graph_path = Path(tmp) / "graph.txt"
+        graph_path.write_text(graph, encoding="utf-8")
 
         out = str(Path(self.out_dir) / f"video_{stamp}.mp4")
-        cmd = build_slideshow_command(segments, subs, graph_path, out,
-                                      self.fps, d)
+        tmp_out = Path(tmp) / "video.mp4"
+        # Run from the temporary folder so the command contains only compact
+        # relative paths, including when existing images have long names.
+        for seg in segments:
+            seg.audio_path = Path(seg.audio_path).name
+        for sub in subs:
+            sub.png_path = Path(sub.png_path).name
+        cmd = build_slideshow_command(segments, subs, graph_path.name,
+                                      tmp_out.name, self.fps, d)
         total = sum(s.duration for s in segments)
         self.status.emit("Đang dựng video…")
         code = ffmpeg_runner.run(
             cmd, total,
             progress_cb=lambda p: self.progress.emit(0.6 + 0.4 * p),
-            stop_event=self._stop, log_cb=self.log.emit)
+            stop_event=self._stop, log_cb=self.log.emit, cwd=tmp)
         if code == -1:
             raise _Stopped()
-        if code != 0 or not Path(out).exists():
+        if code != 0 or not tmp_out.exists():
             raise RuntimeError("ffmpeg lỗi khi dựng video (xem log).")
+        shutil.move(str(tmp_out), out)
         self.progress.emit(1.0)
         return out
 

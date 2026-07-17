@@ -170,13 +170,15 @@ def build_command(input_path: str, output_path: str, layout: Layout, fps: float,
 def run(cmd: List[str], total_seconds: float,
         progress_cb: Optional[Callable[[float], None]] = None,
         stop_event: Optional[threading.Event] = None,
-        log_cb: Optional[Callable[[str], None]] = None) -> int:
+        log_cb: Optional[Callable[[str], None]] = None,
+        cwd: Optional[str] = None) -> int:
     """Run an ffmpeg command, reporting progress in [0,1]. Returns the exit
     code (or -1 if stopped)."""
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
         bufsize=1, creationflags=NO_WINDOW,
+        cwd=cwd,
     )
 
     # Drain stderr in a thread so the pipe never blocks; keep the tail for errors.

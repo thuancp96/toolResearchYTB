@@ -22,17 +22,37 @@ _FONT_CANDIDATES = [
     "C:/Windows/Fonts/calibri.ttf",
 ]
 
+# Malgun Gothic ships with Korean Windows and has full Hangul coverage.  It
+# must be preferred over Arial/Segoe UI when Pillow renders Korean subtitles,
+# otherwise unsupported glyphs appear as square boxes.
+_KOREAN_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/malgun.ttf",
+    "C:/Windows/Fonts/malgunbd.ttf",
+    "C:/Windows/Fonts/gulim.ttc",
+    *_FONT_CANDIDATES,
+]
 
-def default_font_path() -> str:
-    for c in _FONT_CANDIDATES:
+
+def _has_hangul(text: str) -> bool:
+    return any(
+        "\u1100" <= ch <= "\u11ff" or "\u3130" <= ch <= "\u318f"
+        or "\uac00" <= ch <= "\ud7a3"
+        for ch in text
+    )
+
+
+def default_font_path(text: str = "") -> str:
+    candidates = _KOREAN_FONT_CANDIDATES if _has_hangul(text) else _FONT_CANDIDATES
+    for c in candidates:
         if os.path.exists(c):
             return c
     return ""
 
 
-def _load_font(style: TextStyle, size: int = 0) -> ImageFont.FreeTypeFont:
+def _load_font(style: TextStyle, size: int = 0,
+               text: str = "") -> ImageFont.FreeTypeFont:
     size = max(8, int(size or style.size_pt))
-    path = style.font_path or default_font_path()
+    path = style.font_path or default_font_path(text)
     if path and os.path.exists(path):
         try:
             return ImageFont.truetype(path, size)
@@ -101,12 +121,12 @@ def _fit(draw, text: str, style: TextStyle, max_w: int, max_h: int,
     base = max(8, int(style.size_pt))
     min_size = max(8, int(base * 0.35))
     for size in range(base, min_size - 1, -1):
-        font = _load_font(style, size)
+        font = _load_font(style, size, text)
         lines, line_h, spacing, total_h = _measure(draw, text, font, max_w)
         line_ok = max_lines <= 0 or len(lines) <= max_lines
         if line_ok and total_h <= max_h:
             return font, lines, line_h, spacing
-    font = _load_font(style, min_size)
+    font = _load_font(style, min_size, text)
     lines, line_h, spacing, _ = _measure(draw, text, font, max_w)
     if max_lines > 0:
         lines = _truncate(draw, lines, font, max_w, max_lines)
@@ -151,7 +171,7 @@ def render_text_png(text: str, w: int, h: int, style: TextStyle, out_path: str,
         font, lines, line_h, spacing = _fit(draw, text.strip(), style,
                                             max_w, max_h, max_lines)
     else:
-        font = _load_font(style)
+        font = _load_font(style, text=text.strip())
         lines, line_h, spacing, _ = _measure(draw, text.strip(), font, max_w)
         if max_lines > 0:
             lines = _truncate(draw, lines, font, max_w, max_lines)

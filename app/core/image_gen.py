@@ -334,7 +334,12 @@ def normalize_prompts(text: str) -> list[str]:
 
 
 def build_filename(index: int, total: int, line: str, ext: str = ".png",
-                   max_stem: int = 120) -> str:
+                   max_stem: int = 48) -> str:
+    """Build a compact, Windows-safe generated-image filename.
+
+    The filename is later passed to ffmpeg when making a slideshow.  Keeping
+    it short avoids Windows command/path length limits for large batches.
+    """
     pad = max(3, len(str(total)))
     ts, title = parse_prompt_line(line)
     if ts:
