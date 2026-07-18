@@ -164,12 +164,13 @@ def synthesize(text: str, voice: str, out_path: str, rate: str = "+0%",
     """
     import edge_tts
 
-    async def _go() -> list[tuple[float, float, str]]:
+    async def _go(boundary: str) -> list[tuple[float, float, str]]:
         words: list[tuple[float, float, str]] = []
-        try:  # edge-tts >= 7 defaults to SentenceBoundary
+        try:
             com = edge_tts.Communicate(text, voice, rate=rate,
-                                       boundary="WordBoundary")
-        except TypeError:  # edge-tts 6.x: WordBoundary is the only mode
+                                       boundary=boundary)
+        except TypeError:
+            # Older edge-tts releases did not expose the boundary argument.
             com = edge_tts.Communicate(text, voice, rate=rate)
         with open(out_path, "wb") as f:
             async for chunk in com.stream():
@@ -186,8 +187,13 @@ def synthesize(text: str, voice: str, out_path: str, rate: str = "+0%",
     for attempt in range(1, max(1, retries) + 1):
         if stop_event is not None and stop_event.is_set():
             raise TTSError("Đã dừng.")
+        # Some Microsoft voices currently reject WordBoundary requests with
+        # NoAudioReceived, even though normal synthesis works.  Fall back to
+        # SentenceBoundary on the next attempt; audio creation must not be
+        # blocked merely because word-level subtitle timings are unavailable.
+        boundary = "WordBoundary" if attempt == 1 else "SentenceBoundary"
         try:
-            words = asyncio.run(_go())
+            words = asyncio.run(_go(boundary))
             # edge-tts occasionally writes an empty file without raising.
             p = Path(out_path)
             if p.exists() and p.stat().st_size > 1024:
