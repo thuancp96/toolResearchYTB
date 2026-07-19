@@ -104,8 +104,9 @@ class ImageGenTab(QWidget):
         lay.addLayout(prov_row)
 
         cf_row = QHBoxLayout()
-        self.cf_account_label = QLabel("Account ID:")
-        self.cf_account = QLineEdit()
+        self.cf_account_label = QLabel("Cloudflare Account IDs:")
+        self.cf_account = QPlainTextEdit()
+        self.cf_account.setFixedHeight(56)
         self.cf_account.setPlaceholderText("Cloudflare Account ID (32 ký tự hex)")
         self.cf_model_label = QLabel("Model:")
         self.cf_model_combo = QComboBox()
@@ -441,6 +442,11 @@ class ImageGenTab(QWidget):
         return [ln.strip() for ln in self.keys_edit.toPlainText().splitlines()
                 if ln.strip()]
 
+    def _parse_cf_account_ids(self) -> list[str]:
+        """Account IDs paired line-for-line with Cloudflare API tokens."""
+        return [ln.strip() for ln in self.cf_account.toPlainText().splitlines()
+                if ln.strip()]
+
     def _update_count(self) -> None:
         self.count_label.setText(f"{len(self._parse_prompts())} prompt")
 
@@ -460,16 +466,22 @@ class ImageGenTab(QWidget):
     # ------------------------------------------------------------------
     def _start(self) -> None:
         keys = self._parse_keys()
+        account_ids = self._parse_cf_account_ids()
         prompts = self._parse_prompts()
         out = self.out_dir.path()
         if self._provider() in ("gemini", "cloudflare") and not keys:
             QMessageBox.warning(self, "Thiếu API key",
                                 "Nhập ít nhất 1 key/token (mỗi dòng 1 cái).")
             return
-        if self._provider() == "cloudflare" and not self.cf_account.text().strip():
+        if self._provider() == "cloudflare" and not account_ids:
             QMessageBox.warning(self, "Thiếu Account ID",
                                 "Nhập Cloudflare Account ID (xem ở trang chủ "
                                 "dash.cloudflare.com, cột bên phải).")
+            return
+        if self._provider() == "cloudflare" and len(account_ids) != len(keys):
+            QMessageBox.warning(
+                self, "Thiếu cặp Cloudflare",
+                "Số Account ID phải bằng số API token; mỗi dòng được ghép thành một cặp.")
             return
         if not prompts:
             QMessageBox.warning(self, "Thiếu prompt",
@@ -487,7 +499,7 @@ class ImageGenTab(QWidget):
         self.worker = ImageGenWorker(prompts, out, keys,
                                      provider=self._provider(),
                                      width=w, height=h, aspect=aspect,
-                                     account_id=self.cf_account.text().strip(),
+                                     account_ids=account_ids,
                                      model=self.cf_model_combo.currentData(),
                                      char_name=self.char_name.text().strip(),
                                      char_desc=self.char_desc.toPlainText().strip(),
@@ -687,7 +699,7 @@ class ImageGenTab(QWidget):
             "provider": self._provider(),
             "size_index": self.size_combo.currentIndex(),
             "api_keys": self._parse_keys(),
-            "cf_account_id": self.cf_account.text().strip(),
+            "cf_account_ids": self._parse_cf_account_ids(),
             "cf_model": self.cf_model_combo.currentData(),
             "char_name": self.char_name.text().strip(),
             "char_desc": self.char_desc.toPlainText().strip(),
@@ -716,7 +728,10 @@ class ImageGenTab(QWidget):
         self.size_combo.setCurrentIndex(
             min(max(0, d.get("size_index", 0)), self.size_combo.count() - 1))
         self.keys_edit.setPlainText("\n".join(d.get("api_keys", [])))
-        self.cf_account.setText(d.get("cf_account_id", ""))
+        account_ids = d.get("cf_account_ids")
+        if account_ids is None:  # migrate the old single-Account-ID setting
+            account_ids = [d.get("cf_account_id", "")]
+        self.cf_account.setPlainText("\n".join(x for x in account_ids if x))
         m = self.cf_model_combo.findData(d.get("cf_model", ""))
         if m >= 0:
             self.cf_model_combo.setCurrentIndex(m)

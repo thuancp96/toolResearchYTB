@@ -24,6 +24,8 @@ from PySide6.QtCore import QThread, Signal
 
 GEMINI_MODEL = "gemini-2.5-flash-image"
 GEMINI_TEXT_MODEL = "gemini-2.5-flash"  # vision input works on the free tier
+# ``gemini-2.5-flash-image`` uses the v1beta GenerateContent schema.
+# Its stable-v1 schema rejects generationConfig fields with "Invalid JSON".
 API_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
            f"{GEMINI_MODEL}:generateContent")
 TEXT_API_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
@@ -47,6 +49,7 @@ CF_MODELS = [
 ]
 
 _MIME_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+MAX_IMAGE_ATTEMPTS = 3
 
 
 class ImageGenError(Exception):
@@ -90,6 +93,8 @@ def _gemini_body(prompt: str, ref_image: bytes | None = None,
             "data": base64.b64encode(ref_image).decode("ascii"),
         }})
     parts.append({"text": prompt})
+    # The model's v1beta REST schema uses imageConfig.  The v1 endpoint has a
+    # different schema and rejects these fields as an invalid JSON payload.
     gen_cfg: dict = {"responseModalities": ["TEXT", "IMAGE"]}
     if aspect:
         gen_cfg["imageConfig"] = {"aspectRatio": aspect}
@@ -467,7 +472,8 @@ class ImageGenWorker(QThread):
     def __init__(self, prompts: list[str], out_dir: str, keys: list[str],
                  provider: str = "gemini", width: int = 1280,
                  height: int = 720, aspect: str = "", account_id: str = "",
-                 model: str = "", char_name: str = "", char_desc: str = "",
+                 account_ids: list[str] | None = None, model: str = "",
+                 char_name: str = "", char_desc: str = "",
                  char_image_path: str = "", describe_key: str = "",
                  parent=None):
         super().__init__(parent)
@@ -478,7 +484,11 @@ class ImageGenWorker(QThread):
         self.width = width
         self.height = height
         self.aspect = aspect
-        self.account_id = account_id
+        # Cloudflare credentials are paired by index: account_ids[n] only
+        # ever runs with keys[n].  account_id remains a legacy fallback.
+        self.account_ids = [a.strip() for a in (account_ids or []) if a.strip()]
+        if not self.account_ids and account_id.strip():
+            self.account_ids = [account_id.strip()]
         self.model = model
         self.char_name = char_name
         self.char_desc = char_desc
@@ -574,15 +584,14 @@ class ImageGenWorker(QThread):
             prompt += aspect_hint(self.width, self.height)
 
         if self.provider == "pollinations":
-            attempts = 3  # community service throws transient 5xx errors
+            attempts = MAX_IMAGE_ATTEMPTS  # community service throws transient 5xx errors
             for attempt in range(1, attempts + 1):
                 try:
                     img, mime = generate_image_pollinations(
                         prompt, self.width, self.height, self._seed)
                     return self._save(row, total, line, img, mime)
                 except ImageGenError as e:
-                    transient = e.code >= 500 or e.code == 0
-                    if transient and attempt < attempts:
+                    if attempt < attempts:
                         self.item_status.emit(
                             row, f"Lỗi tạm ({e}) – thử lại "
                                  f"{attempt + 1}/{attempts}")
@@ -595,18 +604,33 @@ class ImageGenWorker(QThread):
             self.item_finished.emit(row, False, "Đã dừng")
             return False
 
-        # gemini & cloudflare: key/token rotation on quota/auth errors
+        # Gemini & Cloudflare retry a failed prompt before proceeding to the
+        # next one. Quota/auth failures rotate immediately because the same
+        # credential cannot recover from those errors.
+        attempts = 0
         while True:
             try:
                 if self.provider == "cloudflare":
                     img, mime = generate_image_cloudflare(
-                        prompt, self.account_id, self.pool.current(),
+                        prompt, self.account_ids[self.pool.index], self.pool.current(),
                         self.model, self.width, self.height)
                 else:
                     img, mime = generate_image(prompt, self.pool.current(),
                                                self._ref_image, self._ref_mime,
                                                self.aspect)
             except ImageGenError as e:
+                if not e.is_key_error:
+                    attempts += 1
+                    if attempts < MAX_IMAGE_ATTEMPTS:
+                        self.item_status.emit(
+                            row, f"Retry {attempts + 1}/{MAX_IMAGE_ATTEMPTS}: {e}")
+                        self.log.emit(
+                            f"Prompt {row + 1} failed; retry "
+                            f"{attempts + 1}/{MAX_IMAGE_ATTEMPTS}: {e}")
+                        if not self._stop.wait(3.0):
+                            continue
+                        self.item_finished.emit(row, False, "Stopped")
+                        return False
                 if not e.is_key_error:
                     self.item_finished.emit(row, False, f"Lỗi: {e}")
                     self.log.emit(f"✗ Dòng {row + 1}: {e}")
