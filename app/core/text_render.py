@@ -22,13 +22,34 @@ _FONT_CANDIDATES = [
     "C:/Windows/Fonts/calibri.ttf",
 ]
 
-# Malgun Gothic ships with Korean Windows and has full Hangul coverage.  It
+# Malgun Gothic ships with Korean Windows and has full Hangul coverage. It
 # must be preferred over Arial/Segoe UI when Pillow renders Korean subtitles,
 # otherwise unsupported glyphs appear as square boxes.
 _KOREAN_FONT_CANDIDATES = [
     "C:/Windows/Fonts/malgun.ttf",
     "C:/Windows/Fonts/malgunbd.ttf",
     "C:/Windows/Fonts/gulim.ttc",
+    *_FONT_CANDIDATES,
+]
+
+# Japanese Windows installs commonly include MS Gothic/Meiryo, which cover
+# Hiragana/Katakana/Kanji much better than Latin-only fonts.
+_JAPANESE_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/msgothic.ttc",
+    "C:/Windows/Fonts/meiryo.ttc",
+    "C:/Windows/Fonts/meiryob.ttc",
+    "C:/Windows/Fonts/yugothic.ttf",
+    "C:/Windows/Fonts/msmincho.ttc",
+    "C:/Windows/Fonts/yuigothic.ttf",
+    *_FONT_CANDIDATES,
+]
+
+# Chinese Windows installs commonly ship SimSun or Microsoft YaHei.
+_CHINESE_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/simsun.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msyhbd.ttc",
     *_FONT_CANDIDATES,
 ]
 
@@ -41,8 +62,30 @@ def _has_hangul(text: str) -> bool:
     )
 
 
+def _has_japanese(text: str) -> bool:
+    return any(
+        "\u3040" <= ch <= "\u309f" or  # Hiragana
+        "\u30a0" <= ch <= "\u30ff" or  # Katakana
+        "\uff66" <= ch <= "\uff9f" or  # Half-width Katakana
+        "\u3400" <= ch <= "\u4dbf" or  # CJK Extension A
+        "\u4e00" <= ch <= "\u9fff"     # Kanji / common CJK Unified Ideographs
+        for ch in text
+    )
+
+
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
 def default_font_path(text: str = "") -> str:
-    candidates = _KOREAN_FONT_CANDIDATES if _has_hangul(text) else _FONT_CANDIDATES
+    if _has_hangul(text):
+        candidates = _KOREAN_FONT_CANDIDATES
+    elif _has_japanese(text):
+        candidates = _JAPANESE_FONT_CANDIDATES
+    elif _has_cjk(text):
+        candidates = _CHINESE_FONT_CANDIDATES
+    else:
+        candidates = _FONT_CANDIDATES
     for c in candidates:
         if os.path.exists(c):
             return c

@@ -9,6 +9,37 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPen, QPixmap
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject
 
+
+def _has_hangul(text: str) -> bool:
+    return any(
+        "\u1100" <= ch <= "\u11ff" or "\u3130" <= ch <= "\u318f"
+        or "\uac00" <= ch <= "\ud7a3"
+        for ch in text
+    )
+
+
+def _has_japanese(text: str) -> bool:
+    return any(
+        "\u3040" <= ch <= "\u309f" or
+        "\u30a0" <= ch <= "\u30ff" or
+        "\uff66" <= ch <= "\uff9f"
+        for ch in text
+    )
+
+
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _qt_font_families(text: str) -> list[str]:
+    if _has_hangul(text):
+        return ["Malgun Gothic", "Gulim", "Segoe UI", "Arial"]
+    if _has_japanese(text):
+        return ["Meiryo", "MS Gothic", "Yu Gothic", "MS Mincho", "Segoe UI", "Arial"]
+    if _has_cjk(text):
+        return ["SimSun", "Microsoft YaHei", "Segoe UI", "Arial"]
+    return ["Segoe UI", "Arial", "Tahoma"]
+
 from ..core.layout_model import TextStyle
 
 _CORNERS = ("tl", "tr", "bl", "br")
@@ -189,14 +220,14 @@ class ResizableItem(QGraphicsObject):
                 max_lines: int) -> tuple:
         min_size = max(6, int(base_px * 0.35))
         for size in range(base_px, min_size - 1, -1):
-            fm = QFontMetricsF(self._font_px(size))
+            fm = QFontMetricsF(self._font_for_text(size, text))
             lines = self._wrap_qt(fm, text, max_w)
             spacing = fm.height() * 0.18
             total_h = len(lines) * fm.height() + max(0, len(lines) - 1) * spacing
             line_ok = max_lines <= 0 or len(lines) <= max_lines
             if line_ok and total_h <= max_h:
                 return size, lines
-        fm = QFontMetricsF(self._font_px(min_size))
+        fm = QFontMetricsF(self._font_for_text(min_size, text))
         lines = self._wrap_qt(fm, text, max_w)
         if max_lines > 0:
             lines = self._truncate_qt(fm, lines, max_w, max_lines)
@@ -207,6 +238,11 @@ class ResizableItem(QGraphicsObject):
         f = QFont()
         f.setPixelSize(max(6, int(px)))
         return f
+
+    def _font_for_text(self, px: int, text: str) -> QFont:
+        font = self._font_px(px)
+        font.setFamilies(_qt_font_families(text))
+        return font
 
     def _paint_text_box(self, painter, r: QRectF) -> None:
         tight = (self._style.bg_enabled
@@ -228,12 +264,12 @@ class ResizableItem(QGraphicsObject):
                                      base_px, self._max_lines)
         else:
             px = base_px
-            fm = QFontMetricsF(self._font_px(px))
+            fm = QFontMetricsF(self._font_for_text(px, text))
             lines = self._wrap_qt(fm, text, inner.width())
             if self._max_lines > 0:
                 lines = self._truncate_qt(fm, lines, inner.width(), self._max_lines)
 
-        font = self._font_px(px)
+        font = self._font_for_text(px, text)
         fm = QFontMetricsF(font)
         painter.setFont(font)
         line_h = fm.height()
