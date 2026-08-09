@@ -317,6 +317,32 @@ class SubSpec:
     y: int = 0
 
 
+@dataclass(frozen=True)
+class ImageEffect:
+    """A per-image CapCut-style keyframe motion preset."""
+    kind: str = "default"  # "default" | "zoom" | "move"
+    direction: str = ""    # "left" | "right" | "up" | "down" for move
+
+
+IMAGE_EFFECTS = {"default", "zoom", "move", "random"}
+MOVE_DIRECTIONS = ("left", "right", "up", "down")
+
+
+def resolve_image_effects(choice: str, count: int) -> List[ImageEffect]:
+    """Choose an effect for every image, resolving random choices once.
+
+    Keeping this separate from graph construction makes random output stable
+    throughout one render and lets the default retain the old static behavior.
+    """
+    choice = choice if choice in IMAGE_EFFECTS else "default"
+    effects: List[ImageEffect] = []
+    for _ in range(count):
+        kind = random.choice(("zoom", "move")) if choice == "random" else choice
+        direction = random.choice(MOVE_DIRECTIONS) if kind == "move" else ""
+        effects.append(ImageEffect(kind, direction))
+    return effects
+
+
 def resolve_transitions(choice: str, count: int) -> List[str]:
     """One transition name per cut; ``random`` varies per cut."""
     if choice == "random":
@@ -325,9 +351,55 @@ def resolve_transitions(choice: str, count: int) -> List[str]:
     return [name] * count
 
 
+def _image_filter(index: int, w: int, h: int, fps: int, duration: float,
+                  effect: ImageEffect, zoom_end: float) -> str:
+    """Return the image branch, with optional scale/crop keyframes.
+
+    The first scale/crop exactly matches the former static renderer.  Motion
+    is applied only afterwards, so selecting ``default`` produces the same
+    image framing as earlier versions.
+    """
+    base = (f"[{index}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},setsar=1")
+    duration = max(0.001, duration)
+    if effect.kind == "zoom":
+        # ``crop`` rounds its x/y position to whole pixels, which makes a
+        # centered zoom visibly jump.  perspective samples fractional source
+        # coordinates with cubic interpolation instead.  Each corner is a
+        # keyframe expression: at frame 0 it maps the full image (100%); at the
+        # end it maps the centered 1/zoom_end region (e.g. 120%).
+        frames = max(1, round(duration * fps) - 1)
+        zoom = f"(1+({zoom_end:.4f}-1)*on/{frames})"
+        left = f"(W-W/{zoom})/2"
+        top = f"(H-H/{zoom})/2"
+        right = f"(W+W/{zoom})/2"
+        bottom = f"(H+H/{zoom})/2"
+        base += (f",perspective=x0='{left}':y0='{top}':"
+                 f"x1='{right}':y1='{top}':x2='{left}':y2='{bottom}':"
+                 f"x3='{right}':y3='{bottom}':interpolation=cubic:eval=frame")
+    elif effect.kind == "move":
+        # A small overscan gives room to pan while never exposing an edge.
+        overscan = 1.15
+        span_x = w * (overscan - 1)
+        span_y = h * (overscan - 1)
+        if effect.direction == "left":
+            x, y = f"{span_x:.3f}*(1-t/{duration:.4f})", "(in_h-out_h)/2"
+        elif effect.direction == "right":
+            x, y = f"{span_x:.3f}*t/{duration:.4f}", "(in_h-out_h)/2"
+        elif effect.direction == "up":
+            x, y = "(in_w-out_w)/2", f"{span_y:.3f}*(1-t/{duration:.4f})"
+        else:  # down, including malformed legacy values
+            x, y = "(in_w-out_w)/2", f"{span_y:.3f}*t/{duration:.4f}"
+        base += (f",scale={w * overscan:.3f}:{h * overscan:.3f},"
+                 f"crop={w}:{h}:{x}:{y}")
+    return base + f",fps={fps},settb=AVTB,format=yuv420p[v{index}]"
+
+
 def build_slideshow_graph(segments: List[Segment], w: int, h: int, fps: int,
                           transitions: List[str], trans_dur: float,
-                          subs: List[SubSpec]) -> str:
+                          subs: List[SubSpec],
+                          image_effects: Optional[List[ImageEffect]] = None,
+                          zoom_end: float = 1.2) -> str:
     """Filter graph: n scaled image branches -> xfade chain -> sub overlays
     -> [vout]; n segment WAVs concatenated -> [aout].
 
@@ -338,11 +410,11 @@ def build_slideshow_graph(segments: List[Segment], w: int, h: int, fps: int,
     """
     n = len(segments)
     parts: List[str] = []
+    effects = image_effects or [ImageEffect() for _ in range(n)]
     for i in range(n):
-        parts.append(
-            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h},setsar=1,fps={fps},settb=AVTB,"
-            f"format=yuv420p[v{i}]")
+        effect = effects[i] if i < len(effects) else ImageEffect()
+        clip_dur = segments[i].duration + (trans_dur if i < n - 1 else 0.0)
+        parts.append(_image_filter(i, w, h, fps, clip_dur, effect, zoom_end))
 
     cur = "v0"
     cum = 0.0
@@ -537,7 +609,9 @@ class VoiceVideoWorker(QThread):
                  trans_dur: float = 0.5, subtitles: bool = False,
                  sub_effect: str = "none", sub_size: int = 40,
                  sub_pos: str = "bottom", pause: float = 0.3,
-                 fps: int = 30, timing: str = "timestamps", parent=None):
+                 fps: int = 30, timing: str = "timestamps",
+                 image_effect: str = "default", zoom_end: float = 1.2,
+                 parent=None):
         super().__init__(parent)
         self.mode = mode
         self.timing = timing  # "timestamps" = fit each mark gap | "auto"
@@ -554,6 +628,8 @@ class VoiceVideoWorker(QThread):
         self.sub_pos = sub_pos
         self.pause = pause
         self.fps = fps
+        self.image_effect = image_effect
+        self.zoom_end = max(1.0, zoom_end)
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -664,9 +740,15 @@ class VoiceVideoWorker(QThread):
         min_dur = min(s.duration for s in segments)
         d = max(0.1, min(self.trans_dur, min_dur / 2))
         trans = resolve_transitions(self.transition, len(segments) - 1)
+        image_effects = resolve_image_effects(self.image_effect, len(segments))
+        # Motion needs more temporal samples than a static slideshow.  60 fps
+        # prevents the small steps that are visible in a slow image zoom while
+        # preserving the previous 30 fps output for the default option.
+        render_fps = 60 if self.image_effect in {"zoom", "move", "random"} else self.fps
 
         graph = build_slideshow_graph(segments, self.width, self.height,
-                                      self.fps, trans, d, subs)
+                                      render_fps, trans, d, subs, image_effects,
+                                      self.zoom_end)
         graph_path = Path(tmp) / "graph.txt"
         graph_path.write_text(graph, encoding="utf-8")
 
@@ -679,7 +761,7 @@ class VoiceVideoWorker(QThread):
         for sub in subs:
             sub.png_path = Path(sub.png_path).name
         cmd = build_slideshow_command(segments, subs, graph_path.name,
-                                      tmp_out.name, self.fps, d)
+                                      tmp_out.name, render_fps, d)
         total = sum(s.duration for s in segments)
         self.status.emit("Đang dựng video…")
         code = ffmpeg_runner.run(

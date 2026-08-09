@@ -374,6 +374,26 @@ class ImageGenTab(QWidget):
         trow.addWidget(self.vv_pause)
         vopts.addLayout(trow)
 
+        effect_row = QHBoxLayout()
+        effect_row.addWidget(QLabel("Hiệu ứng ảnh:"))
+        self.vv_image_effect_combo = QComboBox()
+        self.vv_image_effect_combo.addItem("Mặc định (giữ nguyên ảnh)", "default")
+        self.vv_image_effect_combo.addItem("Zoom in", "zoom")
+        self.vv_image_effect_combo.addItem("Di chuyển ảnh", "move")
+        self.vv_image_effect_combo.addItem("Ngẫu nhiên (zoom / di chuyển)", "random")
+        self.vv_image_effect_combo.currentIndexChanged.connect(
+            self._on_vv_image_effect_changed)
+        effect_row.addWidget(self.vv_image_effect_combo, 1)
+        self.vv_zoom_end_label = QLabel("Zoom cuối:")
+        effect_row.addWidget(self.vv_zoom_end_label)
+        self.vv_zoom_end = QSpinBox()
+        self.vv_zoom_end.setRange(101, 200)
+        self.vv_zoom_end.setValue(120)
+        self.vv_zoom_end.setSuffix(" %")
+        self.vv_zoom_end.setToolTip("Ảnh bắt đầu ở 100% và zoom dần đến giá trị này.")
+        effect_row.addWidget(self.vv_zoom_end)
+        vopts.addLayout(effect_row)
+
         sub_row = QHBoxLayout()
         self.vv_sub_check = QCheckBox("Hiện phụ đề")
         sub_row.addWidget(self.vv_sub_check)
@@ -422,6 +442,7 @@ class ImageGenTab(QWidget):
 
         lay.addWidget(self.vv_body)
         self._on_vv_mode_changed()
+        self._on_vv_image_effect_changed()
         return g
 
     def _vv_mode(self) -> str:
@@ -431,6 +452,12 @@ class ImageGenTab(QWidget):
         mode = self._vv_mode()
         self.vv_body.setVisible(mode != "none")
         self.vv_video_opts.setVisible(mode == "video")
+
+    def _on_vv_image_effect_changed(self) -> None:
+        """Show the end-scale field only when the selected effect needs it."""
+        is_zoom = self.vv_image_effect_combo.currentData() == "zoom"
+        self.vv_zoom_end_label.setVisible(is_zoom)
+        self.vv_zoom_end.setVisible(is_zoom)
 
     # ------------------------------------------------------------------
     # prompts / keys
@@ -584,7 +611,9 @@ class ImageGenTab(QWidget):
             sub_size=self.vv_sub_size.value(),
             sub_pos=self.vv_sub_pos_combo.currentData(),
             pause=self.vv_pause.value(),
-            timing=self.vv_timing_combo.currentData())
+            timing=self.vv_timing_combo.currentData(),
+            image_effect=self.vv_image_effect_combo.currentData(),
+            zoom_end=self.vv_zoom_end.value() / 100.0)
         self.vv_worker.status.connect(self.vv_status.setText)
         self.vv_worker.log.connect(self.vv_status.setText)
         self.vv_worker.progress.connect(
