@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTableWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -60,10 +60,22 @@ class ImageGenTab(QWidget):
     # construction
     # ------------------------------------------------------------------
     def _build(self) -> None:
-        root = QVBoxLayout(self)
-        root.addWidget(self._build_config())
-        root.addWidget(self._build_character())
-        root.addWidget(self._build_prompts(), 1)
+        # This tab has several configuration groups.  Keep all of them in a
+        # scroll area so a smaller window (or higher display scaling) never
+        # clips the Voice/Video controls added below the image settings.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        content = QWidget()
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area)
+
+        root = QVBoxLayout(content)
+        root.addWidget(self._build_image_settings())
+        root.addWidget(self._build_output())
         root.addWidget(self._build_voice_video())
 
         row = QHBoxLayout()
@@ -81,6 +93,32 @@ class ImageGenTab(QWidget):
         self.status = QLabel("Sẵn sàng.")
         root.addWidget(self.status)
         root.addWidget(self._build_table(), 2)
+
+    def _build_image_settings(self) -> QGroupBox:
+        """Collapsible home for image generation, character and prompts."""
+        g = QGroupBox("Cấu hình tạo ảnh / Nhân vật / Prompt ảnh")
+        self.image_settings_group = g
+        g.setCheckable(True)
+        g.setChecked(True)
+        lay = QVBoxLayout(g)
+        self.image_settings_body = QWidget()
+        body = QVBoxLayout(self.image_settings_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self._build_config())
+        body.addWidget(self._build_character())
+        body.addWidget(self._build_prompts())
+        lay.addWidget(self.image_settings_body)
+        g.toggled.connect(self.image_settings_body.setVisible)
+        return g
+
+    def _build_output(self) -> QGroupBox:
+        """Keep the destination selection visible and separate from settings."""
+        g = QGroupBox("Thư mục lưu")
+        lay = QHBoxLayout(g)
+        lay.addWidget(QLabel("Lưu vào:"))
+        self.out_dir = FolderPicker("Thư mục lưu ảnh")
+        lay.addWidget(self.out_dir, 1)
+        return g
 
     def _build_config(self) -> QGroupBox:
         g = QGroupBox("Cấu hình tạo ảnh")
@@ -126,11 +164,6 @@ class ImageGenTab(QWidget):
         self.keys_edit.setFixedHeight(70)
         lay.addWidget(self.keys_edit)
 
-        out_row = QHBoxLayout()
-        out_row.addWidget(QLabel("Lưu vào:"))
-        self.out_dir = FolderPicker("Thư mục lưu ảnh")
-        out_row.addWidget(self.out_dir, 1)
-        lay.addLayout(out_row)
         self._on_provider_changed()
         return g
 
@@ -293,6 +326,10 @@ class ImageGenTab(QWidget):
                              ("Tạo Voice (mp3)", "voice"),
                              ("Tạo Video (mp4)", "video")]:
             self.vv_mode_combo.addItem(label, value)
+        # Video is the useful default for this panel, and it keeps the image
+        # effect/subtitle options visible instead of making them look missing.
+        self.vv_mode_combo.setCurrentIndex(
+            self.vv_mode_combo.findData("video"))
         self.vv_mode_combo.currentIndexChanged.connect(self._on_vv_mode_changed)
         mode_row.addWidget(self.vv_mode_combo, 1)
         lay.addLayout(mode_row)
@@ -347,7 +384,8 @@ class ImageGenTab(QWidget):
         body.addLayout(timing_row)
 
         # Video-only options.
-        self.vv_video_opts = QWidget()
+        self.vv_video_opts = QGroupBox(
+            "Tùy chọn video: chuyển cảnh, hiệu ứng ảnh và phụ đề")
         vopts = QVBoxLayout(self.vv_video_opts)
         vopts.setContentsMargins(0, 0, 0, 0)
 
@@ -451,7 +489,11 @@ class ImageGenTab(QWidget):
     def _on_vv_mode_changed(self) -> None:
         mode = self._vv_mode()
         self.vv_body.setVisible(mode != "none")
-        self.vv_video_opts.setVisible(mode == "video")
+        # Keep this group visible in Voice mode too, but disabled because its
+        # settings only affect mp4 output.  This makes the options discoverable
+        # and prevents them from seeming to disappear from the UI.
+        self.vv_video_opts.setVisible(mode != "none")
+        self.vv_video_opts.setEnabled(mode == "video")
 
     def _on_vv_image_effect_changed(self) -> None:
         """Show the end-scale field only when the selected effect needs it."""
