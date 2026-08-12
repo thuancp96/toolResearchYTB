@@ -40,6 +40,15 @@ SIZES = [
     ("2:3 — ảnh chụp dọc (832×1216)", (832, 1216, "2:3")),
 ]
 
+# Giọng Adam là lựa chọn dành riêng cho luồng tạo Voice/Video. Ứng dụng dùng
+# giọng Microsoft Edge Christopher làm nguồn TTS, có chất nam trầm và ấm gần
+# với phong cách Adam của ElevenLabs, nên không yêu cầu ElevenLabs API key.
+AI_IMAGE_VOICES = [
+    ("🇺🇸 Adam — nam, trầm ấm (phong cách ElevenLabs)",
+     "en-US-ChristopherNeural"),
+    *tts.VOICES,
+]
+
 OK_COLOR = QColor("#7fd67f")
 ERR_COLOR = QColor("#e07a7a")
 
@@ -360,7 +369,7 @@ class ImageGenTab(QWidget):
         vrow = QHBoxLayout()
         vrow.addWidget(QLabel("Giọng đọc:"))
         self.vv_voice_combo = QComboBox()
-        for label, voice_id in tts.VOICES:
+        for label, voice_id in AI_IMAGE_VOICES:
             self.vv_voice_combo.addItem(label, voice_id)
         vrow.addWidget(self.vv_voice_combo, 1)
         self.btn_voice_test = QPushButton("🔊 Nghe thử")
@@ -461,10 +470,14 @@ class ImageGenTab(QWidget):
         self.btn_vv_stop = QPushButton("■ Dừng")
         self.btn_vv_stop.setEnabled(False)
         self.btn_vv_stop.clicked.connect(self._vv_stop)
+        self.btn_open_vv_output = QPushButton("📂 Mở thư mục video")
+        self.btn_open_vv_output.setEnabled(False)
+        self.btn_open_vv_output.clicked.connect(self._open_vv_output_folder)
         self.vv_progress = QProgressBar()
         self.vv_progress.setRange(0, 100)
         run_row.addWidget(self.btn_vv_start)
         run_row.addWidget(self.btn_vv_stop)
+        run_row.addWidget(self.btn_open_vv_output)
         run_row.addWidget(self.vv_progress, 1)
         body.addLayout(run_row)
 
@@ -663,6 +676,7 @@ class ImageGenTab(QWidget):
         self.vv_worker.finished_job.connect(self._on_vv_done)
         self.btn_vv_start.setEnabled(False)
         self.btn_vv_stop.setEnabled(True)
+        self.btn_open_vv_output.setEnabled(False)
         self.vv_progress.setValue(0)
         self.vv_status.setText("Bắt đầu…")
         self.vv_worker.start()
@@ -676,10 +690,21 @@ class ImageGenTab(QWidget):
         self.btn_vv_start.setEnabled(tts.tts_available())
         self.btn_vv_stop.setEnabled(False)
         if ok:
+            self.btn_open_vv_output.setEnabled(self._vv_mode() == "video")
             self.vv_status.setText(f"✓ Xong: {detail}")
             QMessageBox.information(self, "Hoàn tất", f"Đã xuất:\n{detail}")
         else:
             self.vv_status.setText(f"✗ {detail}")
+
+    def _open_vv_output_folder(self) -> None:
+        """Open the folder containing the successfully rendered video."""
+        out_dir = self.out_dir.path()
+        if not out_dir:
+            return
+        try:
+            os.startfile(out_dir)
+        except OSError as e:
+            QMessageBox.warning(self, "Không mở được thư mục", str(e))
 
     def _vv_test_voice(self) -> None:
         if self.voice_test_worker and self.voice_test_worker.isRunning():

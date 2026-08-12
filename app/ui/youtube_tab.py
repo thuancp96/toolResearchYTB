@@ -171,7 +171,8 @@ class YouTubeTab(QWidget):
         grid.addWidget(self.api_key, 0, 1, 1, 5)
 
         self.keyword = QLineEdit()
-        self.keyword.setPlaceholderText("để trống nếu lấy TOP TRENDING")
+        self.keyword.setPlaceholderText(
+            "để trống để tìm kênh thỏa điều kiện")
         self.region = QComboBox()
         self.region.setEditable(True)
         for code in REGIONS:
@@ -196,6 +197,10 @@ class YouTubeTab(QWidget):
             "Khi chọn khu vực, kênh khai báo quốc gia khác luôn bị loại.\n"
             "Bật ô này để loại cả kênh KHÔNG khai báo quốc gia\n"
             "(kết quả chuẩn hơn nhưng sẽ ít hơn đáng kể).")
+        self.skip_short_channels = QCheckBox("Bỏ qua kênh có Short")
+        self.skip_short_channels.setToolTip(
+            "Loại kênh nếu một trong các video gần đây có thời lượng tối đa 3 phút.\n"
+            "YouTube API không cung cấp cờ Short riêng nên đây là nhận diện gần đúng.")
 
         cells = [
             ("Từ khóa:", self.keyword), ("Khu vực:", self.region),
@@ -219,6 +224,7 @@ class YouTubeTab(QWidget):
         last_row = 1 + len(cells) // 3
         grid.addWidget(self.top_trending, last_row, 0, 1, 2)
         grid.addWidget(self.strict_region, last_row, 2, 1, 2)
+        grid.addWidget(self.skip_short_channels, last_row, 4, 1, 2)
         return g
 
     def _build_download_bar(self) -> QHBoxLayout:
@@ -285,6 +291,7 @@ class YouTubeTab(QWidget):
             threads=self.threads.value(),
             top_trending=self.top_trending.isChecked(),
             strict_region=self.strict_region.isChecked(),
+            skip_short_channels=self.skip_short_channels.isChecked(),
         )
 
     def _api_keys(self) -> list[str]:
@@ -571,6 +578,7 @@ class YouTubeTab(QWidget):
             "threads": self.threads.value(),
             "top_trending": self.top_trending.isChecked(),
             "strict_region": self.strict_region.isChecked(),
+            "skip_short_channels": self.skip_short_channels.isChecked(),
             "dl_dir": self.dl_dir.path(),
             "dl_count": self.dl_count.value(),
             "dl_all": self.dl_all.isChecked(),
@@ -600,6 +608,7 @@ class YouTubeTab(QWidget):
         self.threads.setValue(d.get("threads", 5))
         self.top_trending.setChecked(d.get("top_trending", False))
         self.strict_region.setChecked(d.get("strict_region", False))
+        self.skip_short_channels.setChecked(d.get("skip_short_channels", False))
         self.dl_dir.setPath(d.get("dl_dir", ""))
         self.dl_count.setValue(d.get("dl_count", 5))
         self.dl_all.setChecked(d.get("dl_all", False))

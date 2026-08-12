@@ -7,6 +7,7 @@ by monkeypatching ``_http_get_json``.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -189,8 +190,9 @@ def _collect_channel_ids(endpoint: str, base_params: dict, key: str,
     seen = set()
     page_token = None
     fetched = 0
-    pages = 0
-    while fetched < max_results and pages < 20:
+    # Keep following the API's nextPageToken until the caller's requested
+    # limit is reached.  A fixed page cap silently omitted valid results.
+    while fetched < max_results:
         params = dict(base_params)
         params["maxResults"] = min(50, max_results - fetched)
         params["pageToken"] = page_token
@@ -202,7 +204,6 @@ def _collect_channel_ids(endpoint: str, base_params: dict, key: str,
                 seen.add(cid)
                 ids.append(cid)
         fetched += len(items)
-        pages += 1
         page_token = data.get("nextPageToken")
         if not page_token or not items:
             break
@@ -218,14 +219,36 @@ REGION_LANG = {
     "ES": "es", "MX": "es", "IT": "it",
 }
 
+# search.list requires a query.  These broad queries provide a non-trending
+# discovery source for blank searches; ChannelFinderWorker applies filters.
+DISCOVERY_QUERIES = ("a", "e", "i", "o", "the", "music", "video")
+
 
 def search_video_channel_ids(key: str, q: str, region: str, published_after: str,
                              max_results: int, order: str = "viewCount") -> List[str]:
     return _collect_channel_ids("search", {
-        "part": "snippet", "q": q, "type": "video", "order": order,
+        "part": "snippet", "q": q.strip() or None, "type": "video", "order": order,
         "regionCode": region or None, "publishedAfter": published_after or None,
         "relevanceLanguage": REGION_LANG.get((region or "").upper()),
     }, key, max_results)
+
+
+def discover_channel_ids(key: str, region: str, published_after: str,
+                         max_results: int) -> List[str]:
+    """Find recent active channels without using the Trending feed."""
+    ids: List[str] = []
+    seen = set()
+    for query in DISCOVERY_QUERIES:
+        if len(ids) >= max_results:
+            break
+        found = search_video_channel_ids(
+            key, query, region, published_after, max_results - len(ids),
+            order="date")
+        for channel_id in found:
+            if channel_id not in seen:
+                seen.add(channel_id)
+                ids.append(channel_id)
+    return ids
 
 
 def trending_channel_ids(key: str, region: str, max_results: int) -> List[str]:
@@ -261,15 +284,31 @@ def recent_video_ids(key: str, uploads_playlist: str, n: int) -> List[str]:
 def list_video_stats(key: str, ids: List[str]) -> List[dict]:
     out: List[dict] = []
     for batch in _chunks(ids, 50):
-        data = _get("videos", {"part": "snippet,statistics",
+        data = _get("videos", {"part": "snippet,statistics,contentDetails",
                                "id": ",".join(batch), "maxResults": 50}, key)
         for it in data.get("items", []):
             out.append({
                 "id": it.get("id", ""),
                 "published_at": it.get("snippet", {}).get("publishedAt", ""),
                 "views": _int(it.get("statistics", {}).get("viewCount")),
+                "duration_seconds": iso_duration_seconds(
+                    it.get("contentDetails", {}).get("duration", "")),
             })
     return out
+
+
+def iso_duration_seconds(value: str) -> int:
+    """Convert a YouTube ISO 8601 duration (for example PT1M30S) to seconds."""
+    match = re.fullmatch(r"P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value)
+    if not match:
+        return 0
+    hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def has_short_video(videos: List[dict]) -> bool:
+    """Heuristically detect Shorts by YouTube's maximum eligible duration."""
+    return any(0 < video.get("duration_seconds", 0) <= 180 for video in videos)
 
 
 # --------------------------------------------------------------------------

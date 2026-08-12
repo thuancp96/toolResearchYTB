@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -35,6 +36,7 @@ class FinderConfig:
     threads: int = 5
     top_trending: bool = False
     strict_region: bool = False   # also drop channels with no declared country
+    skip_short_channels: bool = False
 
 
 class ChannelFinderWorker(QThread):
@@ -71,7 +73,7 @@ class ChannelFinderWorker(QThread):
 
     def _run(self) -> None:
         cfg, key = self.cfg, self.key
-        trending = cfg.top_trending or not cfg.keyword.strip()
+        trending = cfg.top_trending
 
         self.status.emit("Đang lấy danh sách kênh…")
         if trending:
@@ -79,9 +81,16 @@ class ChannelFinderWorker(QThread):
             ids = yt.trending_channel_ids(key, cfg.region, cfg.max_results)
         else:
             pub = yt.iso_days_ago(cfg.posted_days)
-            self.log.emit(f"Chế độ từ khóa: '{cfg.keyword}' (đăng sau {pub[:10]})")
-            ids = yt.search_video_channel_ids(
-                key, cfg.keyword, cfg.region, pub, cfg.max_results)
+            has_keyword = bool(cfg.keyword.strip())
+            mode = (f"từ khóa: '{cfg.keyword}'" if has_keyword
+                    else "không có từ khóa (kênh có video mới đăng)")
+            self.log.emit(f"Chế độ {mode} (đăng sau {pub[:10]})")
+            if has_keyword:
+                ids = yt.search_video_channel_ids(
+                    key, cfg.keyword, cfg.region, pub, cfg.max_results)
+            else:
+                ids = yt.discover_channel_ids(
+                    key, cfg.region, pub, cfg.max_results)
 
         if self._stop.is_set():
             self.finished_all.emit(0)
@@ -112,7 +121,8 @@ class ChannelFinderWorker(QThread):
                     break
                 info = fut.result()
                 done += 1
-                self.channel_found.emit(info)
+                if info is not None:
+                    self.channel_found.emit(info)
                 self.progress.emit(done, total)
 
         self.status.emit(f"Hoàn tất: {done} kênh." if not self._stop.is_set()
@@ -140,7 +150,7 @@ class ChannelFinderWorker(QThread):
             return False
         return True
 
-    def _enrich(self, info: ChannelInfo) -> ChannelInfo:
+    def _enrich(self, info: ChannelInfo) -> Optional[ChannelInfo]:
         if self._stop.is_set():
             return info
         try:
@@ -148,6 +158,9 @@ class ChannelFinderWorker(QThread):
                 vids = yt.recent_video_ids(
                     self.key, info.uploads_playlist, self.cfg.recent_per_channel)
                 stats = yt.list_video_stats(self.key, vids) if vids else []
+                if self.cfg.skip_short_channels and yt.has_short_video(stats):
+                    self.log.emit(f"  Bỏ qua kênh có Short: {info.title}")
+                    return None
                 info.recent_count = len(stats)
                 info.views_per_day_high, info.top_video_id = yt.recent_metrics(stats)
         except YouTubeApiError as e:
