@@ -366,6 +366,17 @@ class ImageGenTab(QWidget):
         srow.addStretch(1)
         body.addLayout(srow)
 
+        video_row = QHBoxLayout()
+        self.vv_video_files = []
+        self.vv_video_label = QLabel("Chưa chọn video đầu vào (ghép trước ảnh)")
+        self.btn_vv_video_files = QPushButton("Chọn video local…")
+        self.btn_vv_video_files.clicked.connect(self._choose_vv_videos)
+        video_row.addWidget(self.btn_vv_video_files)
+        video_row.addWidget(self.vv_video_label, 1)
+        self.vv_keep_video_audio = QCheckBox("Giữ nhạc video")
+        video_row.addWidget(self.vv_keep_video_audio)
+        body.addLayout(video_row)
+
         vrow = QHBoxLayout()
         vrow.addWidget(QLabel("Giọng đọc:"))
         self.vv_voice_combo = QComboBox()
@@ -630,6 +641,14 @@ class ImageGenTab(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "Không đọc được file", str(e))
 
+    def _choose_vv_videos(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Chọn video đầu vào theo thứ tự", "",
+            "Video (*.mp4 *.mov *.mkv *.avi *.webm);;Tất cả (*)")
+        if paths:
+            self.vv_video_files = paths
+            self.vv_video_label.setText("; ".join(os.path.basename(p) for p in paths))
+
     def _vv_start(self) -> None:
         mode = self._vv_mode()
         if mode == "none":
@@ -649,7 +668,7 @@ class ImageGenTab(QWidget):
                 self, "Script trống",
                 "Dán script dạng:\n[00:00]\nVoice: \"…\"")
             return
-        if mode == "video" and not slideshow.list_images(out):
+        if mode == "video" and not slideshow.list_images(out) and not self.vv_video_files:
             QMessageBox.warning(
                 self, "Chưa có ảnh",
                 "Thư mục lưu chưa có ảnh nào — tạo ảnh trước rồi mới tạo video.")
@@ -669,6 +688,8 @@ class ImageGenTab(QWidget):
             timing=self.vv_timing_combo.currentData(),
             image_effect=self.vv_image_effect_combo.currentData(),
             zoom_end=self.vv_zoom_end.value() / 100.0)
+        self.vv_worker.video_files = slideshow.list_videos(self.vv_video_files)
+        self.vv_worker.keep_video_audio = self.vv_keep_video_audio.isChecked()
         self.vv_worker.status.connect(self.vv_status.setText)
         self.vv_worker.log.connect(self.vv_status.setText)
         self.vv_worker.progress.connect(

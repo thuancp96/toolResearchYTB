@@ -33,6 +33,7 @@ from PySide6.QtCore import QThread, Signal
 from . import ffmpeg_runner, tts
 from .layout_model import TextStyle
 from .text_render import render_text_png
+from .video_probe import probe
 
 # "[mm:ss]" or "[hh:mm:ss]", optionally a range "[00:06 - 00:12]", optionally
 # followed by a separator and the voice text on the same line.
@@ -76,6 +77,8 @@ class Segment:
     image_path: str = ""   # matched image (video mode)
     words: list = None     # [(start_s, end_s, word)] from TTS, pre-speedup
     speed: float = 1.0     # time-compression applied to the audio (atempo)
+    video_path: str = ""
+    keep_video_audio: bool = False
 
 
 def ts_to_seconds(ts: str) -> float:
@@ -146,6 +149,11 @@ def list_images(out_dir: str) -> List[str]:
     except OSError:
         return []
     return [str(p) for p in files]
+
+
+def list_videos(paths: List[str]) -> List[str]:
+    """Validate local video paths without changing their upload order."""
+    return [str(Path(p)) for p in paths if Path(p).is_file()]
 
 
 def _file_ts_seconds(path: str) -> Optional[float]:
@@ -414,7 +422,14 @@ def build_slideshow_graph(segments: List[Segment], w: int, h: int, fps: int,
     for i in range(n):
         effect = effects[i] if i < len(effects) else ImageEffect()
         clip_dur = segments[i].duration + (trans_dur if i < n - 1 else 0.0)
-        parts.append(_image_filter(i, w, h, fps, clip_dur, effect, zoom_end))
+        if segments[i].video_path:
+            parts.append(
+                f"[{i}:v]setpts=PTS-STARTPTS,scale={w}:{h}:"
+                f"force_original_aspect_ratio=increase,crop={w}:{h},fps={fps},"
+                f"tpad=stop_mode=clone:stop_duration={clip_dur:.3f},"
+                f"trim=duration={clip_dur:.3f},settb=AVTB,format=yuv420p[v{i}]")
+        else:
+            parts.append(_image_filter(i, w, h, fps, clip_dur, effect, zoom_end))
 
     cur = "v0"
     cum = 0.0
@@ -443,7 +458,20 @@ def build_slideshow_graph(segments: List[Segment], w: int, h: int, fps: int,
 
     parts.append(f"[{cur}]format=yuv420p[vout]")
     parts.append("".join(f"[{n + i}:a]" for i in range(n))
-                 + f"concat=n={n}:v=0:a=1[aout]")
+                 + f"concat=n={n}:v=0:a=1[voiceout]")
+    kept = [i for i, s in enumerate(segments)
+            if s.video_path and s.keep_video_audio]
+    source_audio_idx = {i: 2 * n + j for j, i in enumerate(
+        k for k, s in enumerate(segments) if s.video_path)}
+    for j, i in enumerate(kept):
+        parts.append(f"[{source_audio_idx[i]}:a]atrim=duration={segments[i].duration:.3f},"
+                     f"asetpts=PTS-STARTPTS,volume=1[aorig{j}]")
+    if kept:
+        mix = "[voiceout]" + "".join(f"[aorig{j}]" for j in range(len(kept)))
+        parts.append(mix + f"amix=inputs={len(kept) + 1}:duration=first:"
+                     "dropout_transition=0[aout]")
+    else:
+        parts.append("[voiceout]anull[aout]")
     return ";\n".join(parts)
 
 
@@ -454,10 +482,16 @@ def build_slideshow_command(segments: List[Segment], subs: List[SubSpec],
     cmd: List[str] = [ffmpeg_runner.get_ffmpeg(), "-y", "-hide_banner"]
     for i, seg in enumerate(segments):
         clip = seg.duration + (trans_dur if i < n - 1 and n > 1 else 0.0)
-        cmd += ["-loop", "1", "-t", f"{clip:.3f}", "-framerate", str(fps),
-                "-i", seg.image_path]
+        if seg.video_path:
+            cmd += ["-i", seg.video_path]
+        else:
+            cmd += ["-loop", "1", "-t", f"{clip:.3f}", "-framerate", str(fps),
+                    "-i", seg.image_path]
     for seg in segments:
         cmd += ["-i", seg.audio_path]
+    for seg in segments:
+        if seg.video_path:
+            cmd += ["-i", seg.video_path]
     for sub in subs:
         cmd += ["-loop", "1", "-t", f"{sub.end - sub.start:.3f}",
                 "-framerate", str(fps), "-i", sub.png_path]
@@ -630,6 +664,8 @@ class VoiceVideoWorker(QThread):
         self.fps = fps
         self.image_effect = image_effect
         self.zoom_end = max(1.0, zoom_end)
+        self.video_files: List[str] = []
+        self.keep_video_audio = False
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -657,6 +693,7 @@ class VoiceVideoWorker(QThread):
         if not segments:
             raise RuntimeError("Script trống hoặc sai định dạng "
                                "([00:00] + Voice: \"…\").")
+        self._assign_local_videos(segments)
         self._synth_all(segments, tmp)
 
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -670,11 +707,32 @@ class VoiceVideoWorker(QThread):
             return out
         return self._render_video(segments, tmp, stamp)
 
+    def _assign_local_videos(self, segments: List[Segment]) -> None:
+        """Assign selected local clips before TTS so their durations can be
+        used as the target duration for the corresponding voice segment."""
+        for i, path in enumerate(self.video_files[:len(segments)]):
+            segments[i].video_path = Path(path).resolve().as_posix()
+            segments[i].keep_video_audio = self.keep_video_audio
+
     def _synth_all(self, segments: List[Segment], tmp: str) -> None:
         budget = 0.6 if self.mode == "video" else 0.9
         total = len(segments)
         slots = (compute_slots(segments) if self.timing == "timestamps"
                  else [None] * total)
+        # A local clip is the hard duration boundary for its segment.  This
+        # also applies in "auto" timing mode; a long narration is sped up to
+        # finish before the clip ends instead of freezing on its last frame.
+        for i, seg in enumerate(segments):
+            if not seg.video_path:
+                continue
+            try:
+                duration = probe(seg.video_path).duration
+            except Exception as e:
+                self.log.emit(f"⚠ Không đọc được thời lượng video local "
+                              f"{i + 1}: {e}")
+                continue
+            if duration > 0:
+                slots[i] = duration
         for i, seg in enumerate(segments):
             self._check_stop()
             self.status.emit(f"Đọc voice {i + 1}/{total}…")
@@ -722,11 +780,13 @@ class VoiceVideoWorker(QThread):
                       stamp: str) -> str:
         self._check_stop()
         images = list_images(self.out_dir)
-        if not images:
+        if not images and not self.video_files:
             raise RuntimeError("Không tìm thấy ảnh nào trong thư mục lưu — "
                                "hãy tạo ảnh trước.")
-        match_images(segments, images, self.log.emit)
-        stage_image_inputs(segments, tmp)
+        image_segments = [s for s in segments if not s.video_path]
+        if image_segments:
+            match_images(image_segments, images, self.log.emit)
+            stage_image_inputs(image_segments, tmp)
 
         subs: List[SubSpec] = []
         if self.subtitles:
