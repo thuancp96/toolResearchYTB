@@ -34,6 +34,7 @@ from . import ffmpeg_runner, tts
 from .layout_model import TextStyle
 from .text_render import render_text_png
 from .video_probe import probe
+from . import whiteboard
 
 # "[mm:ss]" or "[hh:mm:ss]", optionally a range "[00:06 - 00:12]", optionally
 # followed by a separator and the voice text on the same line.
@@ -783,6 +784,18 @@ class VoiceVideoWorker(QThread):
         if not images and not self.video_files:
             raise RuntimeError("Không tìm thấy ảnh nào trong thư mục lưu — "
                                "hãy tạo ảnh trước.")
+        if self.mode == "whiteboard":
+            images = list_images(self.out_dir)
+            image_segments = [s for s in segments if not s.video_path]
+            match_images(image_segments, images, self.log.emit)
+            for i, seg in enumerate(image_segments):
+                self._check_stop()
+                clip = Path(tmp) / f"whiteboard_{i:04d}.mp4"
+                self.status.emit(f"Vẽ whiteboard {i + 1}/{len(image_segments)}…")
+                whiteboard.render(seg.image_path, str(clip), seg.duration, self._stop)
+                seg.video_path = str(clip)
+            # Local clips are now treated exactly like supplied video inputs.
+            self.video_files = []
         image_segments = [s for s in segments if not s.video_path]
         if image_segments:
             match_images(image_segments, images, self.log.emit)

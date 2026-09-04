@@ -333,7 +333,8 @@ class ImageGenTab(QWidget):
         self.vv_mode_combo = QComboBox()
         for label, value in [("Không (chỉ tạo ảnh)", "none"),
                              ("Tạo Voice (mp3)", "voice"),
-                             ("Tạo Video (mp4)", "video")]:
+                             ("Tạo Video (mp4)", "video"),
+                             ("Tạo Video dạng vẽ (mp4)", "whiteboard")]:
             self.vv_mode_combo.addItem(label, value)
         # Video is the useful default for this panel, and it keeps the image
         # effect/subtitle options visible instead of making them look missing.
@@ -517,7 +518,7 @@ class ImageGenTab(QWidget):
         # settings only affect mp4 output.  This makes the options discoverable
         # and prevents them from seeming to disappear from the UI.
         self.vv_video_opts.setVisible(mode != "none")
-        self.vv_video_opts.setEnabled(mode == "video")
+        self.vv_video_opts.setEnabled(mode in ("video", "whiteboard"))
 
     def _on_vv_image_effect_changed(self) -> None:
         """Show the end-scale field only when the selected effect needs it."""
@@ -654,7 +655,7 @@ class ImageGenTab(QWidget):
         if mode == "none":
             QMessageBox.information(
                 self, "Chưa chọn chế độ",
-                "Chọn 'Tạo Voice' hoặc 'Tạo Video' trước.")
+                "Chọn 'Tạo Voice', 'Tạo Video' hoặc 'Tạo Video dạng vẽ' trước.")
             return
         out = self.out_dir.path()
         if not out:
@@ -668,7 +669,7 @@ class ImageGenTab(QWidget):
                 self, "Script trống",
                 "Dán script dạng:\n[00:00]\nVoice: \"…\"")
             return
-        if mode == "video" and not slideshow.list_images(out) and not self.vv_video_files:
+        if mode in ("video", "whiteboard") and not slideshow.list_images(out) and not self.vv_video_files:
             QMessageBox.warning(
                 self, "Chưa có ảnh",
                 "Thư mục lưu chưa có ảnh nào — tạo ảnh trước rồi mới tạo video.")
@@ -711,7 +712,7 @@ class ImageGenTab(QWidget):
         self.btn_vv_start.setEnabled(tts.tts_available())
         self.btn_vv_stop.setEnabled(False)
         if ok:
-            self.btn_open_vv_output.setEnabled(self._vv_mode() == "video")
+            self.btn_open_vv_output.setEnabled(self._vv_mode() in ("video", "whiteboard"))
             self.vv_status.setText(f"✓ Xong: {detail}")
             QMessageBox.information(self, "Hoàn tất", f"Đã xuất:\n{detail}")
         else:
